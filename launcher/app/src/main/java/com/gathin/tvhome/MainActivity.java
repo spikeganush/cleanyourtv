@@ -63,6 +63,7 @@ import androidx.dynamicanimation.animation.FloatPropertyCompat;
 import androidx.dynamicanimation.animation.SpringAnimation;
 import androidx.dynamicanimation.animation.SpringForce;
 import androidx.recyclerview.widget.GridLayoutManager;
+import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import java.io.File;
@@ -78,7 +79,7 @@ import java.util.Set;
 /**
  * tvOS style home: black, a pinned dock row, an app grid, and one glass highlight that springs between tiles.
  */
-public class MainActivity extends Activity implements AppAdapter.TileListener {
+public class MainActivity extends Activity implements AppAdapter.TileListener, ShelfAdapter.Listener {
 
     private static final int LAUNCHER_SETTINGS_REQUEST = 42;
     /** Sent by QuickSettingsActivity: open Launcher settings from here so Home rebuilds when they close. */
@@ -109,6 +110,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private TextView btnWifi;
     // Remote pill: the watcher started through LocalShell (remote_watcher_command), and its state.
     private TextView btnRemote;
+    // Shelf above the dock (Shelf, ShelfAdapter): Jellyfin "Continue watching", then recent apps.
+    private View shelf;
+    private TextView shelfTitle1, shelfTitle2;
+    private RecyclerView shelfRow1, shelfRow2;
+    private ShelfAdapter continueRow, recentRow;
+    private boolean shelfShown, shelfLoading;
+    private long jellyfinLoadedAt;
+    private List<String> dockApps;
+    private static boolean usageGrantTried;
     private String remoteCommand;
     private boolean remoteBusy;
     private long remoteCheckedAt;
@@ -307,6 +317,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         adapter = new AppAdapter(this, this, COLUMNS, cfg);
         grid.setAdapter(adapter);
+        setupShelf(cfg);
 
         // tvOS layout: push the dock row towards the bottom of the screen, leaving room for
         // rows_below_dock grid rows under it; the rest of the grid stays below until you press Down.
@@ -328,6 +339,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
             public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
+                updateShelfVisibility();
                 if (!glassShown) return;
                 glassTargetY -= dy;
                 glassScrollShift -= dy;
@@ -387,8 +399,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
             if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return true;
             if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                // Back to the dock tile Up came from, not wherever the focus finder lands.
-                focusTile(lastFocused % COLUMNS);
+                // Into the shelf when it shows, else back to the dock tile Up came from.
+                if (shelfShown) focusShelf(firstShelfRow());
+                else focusTile(lastFocused % COLUMNS);
                 return true;
             }
             int firstButton = btnInputs.getVisibility() == View.VISIBLE ? R.id.btnInputs : R.id.btnWifi;
@@ -414,6 +427,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
             boolean onTile = newF != null && newF.getId() == R.id.card;
             if (!onTile) hideGlass();
+            if (newF == null || newF.getId() != R.id.shelfCard) resetShelfTitles();
         });
 
         packageFilter.addAction(Intent.ACTION_PACKAGE_ADDED);
@@ -522,6 +536,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         updateWifiLabel();
         updateInputsButton();
         checkRemoteWatcher(false);
+        refreshShelf();
         sky.update();
         handler.postDelayed(minuteTick, MINUTE_MS);
         if (festive && diya != null) {
@@ -861,7 +876,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     rtlAppGrid, keyCode == KeyEvent.KEYCODE_DPAD_LEFT);
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-            if (position < COLUMNS) return false;          // dock row: let focus move to the top bar
+            if (position < COLUMNS) {                       // dock row: up into the shelf, or the top bar
+                if (!shelfShown) return false;
+                focusShelf(lastShelfRow());
+                grid.playSoundEffect(SoundEffectConstants.NAVIGATION_UP);
+                return true;
+            }
             target = position - COLUMNS;
         } else {
             int lastRowStart = ((count - 1) / COLUMNS) * COLUMNS;
@@ -1078,6 +1098,158 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     /** Hides the Inputs pill when it would have nothing to list: streaming boxes have no HDMI-in, AV or tuner. */
+    // ---- shelf above the dock ---------------------------------------------------------------------
+
+    private void setupShelf(Config cfg) {
+        shelf = findViewById(R.id.shelf);
+        shelfTitle1 = findViewById(R.id.shelfTitle1);
+        shelfTitle2 = findViewById(R.id.shelfTitle2);
+        shelfRow1 = findViewById(R.id.shelfRow1);
+        shelfRow2 = findViewById(R.id.shelfRow2);
+        dockApps = cfg.dockApps;
+        boolean animate = animations && !reducedMotion;
+        continueRow = new ShelfAdapter(this, animate);
+        recentRow = new ShelfAdapter(this, animate);
+        for (RecyclerView rv : new RecyclerView[]{shelfRow1, shelfRow2}) {
+            rv.setLayoutManager(new LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false));
+            rv.setItemAnimator(null);
+        }
+        shelfRow1.setAdapter(continueRow);
+        shelfRow2.setAdapter(recentRow);
+        resetShelfTitles();
+        View.OnLayoutChangeListener reposition = (v, l, t, r, b, ol, ot, or, ob) -> positionShelf();
+        grid.addOnLayoutChangeListener(reposition);
+        shelf.addOnLayoutChangeListener(reposition);
+    }
+
+    /** Sits just above the dock, whatever height the grid's top padding gives it. */
+    private void positionShelf() {
+        if (grid.getHeight() == 0 || shelf.getHeight() == 0) return;
+        int[] g = new int[2], r = new int[2];
+        grid.getLocationInWindow(g);
+        root.getLocationInWindow(r);
+        float dockTop = g[1] - r[1] + grid.getPaddingTop();
+        shelf.setY(dockTop - shelf.getHeight() - 4 * density);
+    }
+
+    /** Loads both rows off the main thread: recent apps every time, Jellyfin at most once a minute. */
+    private void refreshShelf() {
+        if (shelfLoading) return;
+        shelfLoading = true;
+        Context app = getApplicationContext();
+        Set<String> skip = new HashSet<>(dockApps);
+        skip.add("com.android.tv.settings");   // the top bar's Settings button already opens it
+        long now = SystemClock.elapsedRealtime();
+        boolean loadJellyfin = jellyfinLoadedAt == 0 || now - jellyfinLoadedAt > 60_000;
+        int imageWidth = Math.round(128 * density * 1.25f);
+        new Thread(() -> {
+            // Usage access is an app op only the shell can grant; ask the TV's adbd once per process.
+            if (!Shelf.hasUsageAccess(app) && !usageGrantTried) {
+                usageGrantTried = true;
+                LocalShell.run(app, "appops set " + app.getPackageName() + " GET_USAGE_STATS allow", 2);
+            }
+            List<Shelf.Item> recent = Shelf.recentApps(app, skip);
+            List<Shelf.Item> resume = null;
+            if (loadJellyfin) {
+                Shelf.JellyfinConfig c = Shelf.jellyfinConfig(app);
+                resume = c == null ? new ArrayList<>() : Shelf.jellyfinResume(c, imageWidth);
+            }
+            List<Shelf.Item> resumeResult = resume;
+            handler.post(() -> {
+                shelfLoading = false;
+                if (isDestroyed()) return;
+                // A row that holds focus keeps its cards until next time: rebinding would drop the focus.
+                if (!shelfRow2.hasFocus()) recentRow.setItems(recent);
+                if (resumeResult != null && !shelfRow1.hasFocus()) {
+                    continueRow.setItems(resumeResult);
+                    jellyfinLoadedAt = SystemClock.elapsedRealtime();
+                }
+                updateShelfVisibility();
+            });
+        }, "shelf").start();
+    }
+
+    /** Shown when a row has cards and the grid sits at the top; the dock app's big name gives way to it. */
+    private void updateShelfVisibility() {
+        boolean hasContinue = !continueRow.isEmpty(), hasRecent = !recentRow.isEmpty();
+        int c = hasContinue ? View.VISIBLE : View.GONE, r = hasRecent ? View.VISIBLE : View.GONE;
+        if (shelfTitle1.getVisibility() != c) { shelfTitle1.setVisibility(c); shelfRow1.setVisibility(c); }
+        if (shelfTitle2.getVisibility() != r) { shelfTitle2.setVisibility(r); shelfRow2.setVisibility(r); }
+        boolean has = hasContinue || hasRecent;
+        heroName.setVisibility(has ? View.INVISIBLE : View.VISIBLE);
+        boolean show = has && grid.computeVerticalScrollOffset() == 0;
+        if (show == shelfShown) return;
+        shelfShown = show;
+        shelf.animate().cancel();
+        if (show) {
+            shelf.setVisibility(View.VISIBLE);
+            if (animations) {
+                shelf.setAlpha(0f);
+                shelf.animate().alpha(1f).setDuration(200).start();
+            } else {
+                shelf.setAlpha(1f);
+            }
+        } else {
+            shelf.setVisibility(View.INVISIBLE);
+        }
+    }
+
+    private RecyclerView firstShelfRow() {
+        return !continueRow.isEmpty() ? shelfRow1 : shelfRow2;
+    }
+
+    private RecyclerView lastShelfRow() {
+        return !recentRow.isEmpty() ? shelfRow2 : shelfRow1;
+    }
+
+    private void focusShelf(RecyclerView rv) {
+        ShelfAdapter row = (ShelfAdapter) rv.getAdapter();
+        int pos = row.lastFocused;
+        RecyclerView.ViewHolder vh = rv.findViewHolderForAdapterPosition(pos);
+        if (vh != null) {
+            vh.itemView.requestFocus();
+            return;
+        }
+        rv.scrollToPosition(pos);
+        rv.post(() -> {
+            RecyclerView.ViewHolder h = rv.findViewHolderForAdapterPosition(pos);
+            if (h != null) h.itemView.requestFocus();
+        });
+    }
+
+    private void resetShelfTitles() {
+        shelfTitle1.setText(R.string.shelf_continue);
+        shelfTitle2.setText(R.string.shelf_recent);
+    }
+
+    @Override
+    public void onShelfFocused(ShelfAdapter row, Shelf.Item item, int position) {
+        resetShelfTitles();
+        TextView title = row == continueRow ? shelfTitle1 : shelfTitle2;
+        title.setText(getString(row == continueRow ? R.string.shelf_continue : R.string.shelf_recent)
+                + "   ·   " + item.title);
+    }
+
+    @Override
+    public void onShelfClicked(Shelf.Item item) {
+        open(new Intent(item.intent));
+    }
+
+    @Override
+    public boolean onShelfVerticalKey(ShelfAdapter row, int keyCode) {
+        RecyclerView rv = row == continueRow ? shelfRow1 : shelfRow2;
+        if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+            if (rv == shelfRow2 && !continueRow.isEmpty()) focusShelf(shelfRow1);
+            else btnWifi.requestFocus();
+        } else {
+            if (rv == shelfRow1 && !recentRow.isEmpty()) focusShelf(shelfRow2);
+            else focusTile(lastFocused % COLUMNS);
+        }
+        rv.playSoundEffect(keyCode == KeyEvent.KEYCODE_DPAD_UP
+                ? SoundEffectConstants.NAVIGATION_UP : SoundEffectConstants.NAVIGATION_DOWN);
+        return true;
+    }
+
     private static final int REMOTE_CHECKING = 0xFFFFCC00, REMOTE_RUNNING = 0xFF34C759, REMOTE_OFF = 0xFFFF453A;
 
     /**

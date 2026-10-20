@@ -110,11 +110,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
     private TextView btnWifi;
     // Remote pill: the watcher started through LocalShell (remote_watcher_command), and its state.
     private TextView btnRemote;
-    // Shelf above the dock (Shelf, ShelfAdapter): Jellyfin "Continue watching", then recent apps.
-    private View shelf;
-    private TextView shelfTitle1, shelfTitle2;
-    private RecyclerView shelfRow1, shelfRow2;
-    private ShelfAdapter continueRow, recentRow;
+    // Shelf above the dock (Shelf, ShelfAdapter): Home Assistant room controls, Jellyfin "Continue
+    // watching", then recent apps, top to bottom.
+    private ViewGroup shelf;
+    private ShelfRow homeRow, continueRow, recentRow;
+    private final List<ShelfRow> shelfRows = new ArrayList<>();
     private boolean shelfShown, shelfLoading;
     private long jellyfinLoadedAt;
     private List<String> dockApps;
@@ -220,6 +220,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
             updateGreeting();
             updateWifiLabel();
             sky.update();
+            refreshShelf();   // the sleep timer's minutes, a light switched elsewhere
             handler.postDelayed(this, MINUTE_MS);
         }
     };
@@ -1100,39 +1101,77 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
     /** Hides the Inputs pill when it would have nothing to list: streaming boxes have no HDMI-in, AV or tuner. */
     // ---- shelf above the dock ---------------------------------------------------------------------
 
+    /** One shelf row: its header line, its card list, and whether it gave way for lack of room. */
+    private static final class ShelfRow {
+        final TextView title;
+        final RecyclerView list;
+        final ShelfAdapter adapter;
+        String base;
+        boolean suppressed;
+
+        ShelfRow(TextView title, RecyclerView list, ShelfAdapter adapter, String base) {
+            this.title = title;
+            this.list = list;
+            this.adapter = adapter;
+            this.base = base;
+        }
+
+        boolean visible() {
+            return !adapter.isEmpty() && !suppressed;
+        }
+    }
+
     private void setupShelf(Config cfg) {
         shelf = findViewById(R.id.shelf);
-        shelfTitle1 = findViewById(R.id.shelfTitle1);
-        shelfTitle2 = findViewById(R.id.shelfTitle2);
-        shelfRow1 = findViewById(R.id.shelfRow1);
-        shelfRow2 = findViewById(R.id.shelfRow2);
         dockApps = cfg.dockApps;
-        boolean animate = animations && !reducedMotion;
-        continueRow = new ShelfAdapter(this, animate);
-        recentRow = new ShelfAdapter(this, animate);
-        for (RecyclerView rv : new RecyclerView[]{shelfRow1, shelfRow2}) {
-            rv.setLayoutManager(new LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false));
-            rv.setItemAnimator(null);
-        }
-        shelfRow1.setAdapter(continueRow);
-        shelfRow2.setAdapter(recentRow);
+        homeRow = addShelfRow("", 64);
+        continueRow = addShelfRow(getString(R.string.shelf_continue), 86);
+        recentRow = addShelfRow(getString(R.string.shelf_recent), 86);
         resetShelfTitles();
         View.OnLayoutChangeListener reposition = (v, l, t, r, b, ol, ot, or, ob) -> positionShelf();
         grid.addOnLayoutChangeListener(reposition);
         shelf.addOnLayoutChangeListener(reposition);
     }
 
-    /** Sits just above the dock, whatever height the grid's top padding gives it. */
-    private void positionShelf() {
-        if (grid.getHeight() == 0 || shelf.getHeight() == 0) return;
-        int[] g = new int[2], r = new int[2];
-        grid.getLocationInWindow(g);
-        root.getLocationInWindow(r);
-        float dockTop = g[1] - r[1] + grid.getPaddingTop();
-        shelf.setY(dockTop - shelf.getHeight() - 4 * density);
+    private ShelfRow addShelfRow(String base, int listHeightDp) {
+        View v = getLayoutInflater().inflate(R.layout.shelf_row, shelf, false);
+        RecyclerView list = v.findViewById(R.id.rowList);
+        list.getLayoutParams().height = Math.round(listHeightDp * density);
+        list.setLayoutManager(new LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false));
+        list.setItemAnimator(null);
+        ShelfAdapter adapter = new ShelfAdapter(this, animations && !reducedMotion);
+        list.setAdapter(adapter);
+        v.setVisibility(View.GONE);
+        shelf.addView(v);
+        ShelfRow row = new ShelfRow(v.findViewById(R.id.rowTitle), list, adapter, base);
+        shelfRows.add(row);
+        return row;
     }
 
-    /** Loads both rows off the main thread: recent apps every time, Jellyfin at most once a minute. */
+    /** Sits just above the dock. Rows that would run into the top bar give way, the lowest priority first. */
+    private void positionShelf() {
+        if (grid.getHeight() == 0 || shelf.getHeight() == 0) return;
+        int[] g = new int[2], r = new int[2], t = new int[2];
+        grid.getLocationInWindow(g);
+        root.getLocationInWindow(r);
+        View topButtons = findViewById(R.id.topButtons);
+        topButtons.getLocationInWindow(t);
+        float dockTop = g[1] - r[1] + grid.getPaddingTop();
+        float top = dockTop - shelf.getHeight() - 4 * density;
+        float headerBottom = t[1] - r[1] + topButtons.getHeight() + 8 * density;
+        if (top < headerBottom) {
+            for (ShelfRow row : new ShelfRow[]{recentRow, continueRow}) {
+                if (row.visible()) {
+                    row.suppressed = true;
+                    shelf.post(this::updateShelfVisibility);
+                    return;
+                }
+            }
+        }
+        shelf.setY(top);
+    }
+
+    /** Loads the rows off the main thread: Home Assistant and recent apps every time, Jellyfin once a minute. */
     private void refreshShelf() {
         if (shelfLoading) return;
         shelfLoading = true;
@@ -1148,6 +1187,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
                 usageGrantTried = true;
                 LocalShell.run(app, "appops set " + app.getPackageName() + " GET_USAGE_STATS allow", 2);
             }
+            HomeAssistant.Config ha = HomeAssistant.config(app);
+            HomeAssistant.Room room = ha == null ? null : HomeAssistant.load(ha);
             List<Shelf.Item> recent = Shelf.recentApps(app, skip);
             List<Shelf.Item> resume = null;
             if (loadJellyfin) {
@@ -1158,12 +1199,20 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
             handler.post(() -> {
                 shelfLoading = false;
                 if (isDestroyed()) return;
-                // A row that holds focus keeps its cards until next time: rebinding would drop the focus.
-                if (!shelfRow2.hasFocus()) recentRow.setItems(recent);
-                if (resumeResult != null && !shelfRow1.hasFocus()) {
-                    continueRow.setItems(resumeResult);
+                if (ha == null) {
+                    homeRow.adapter.setItems(new ArrayList<>());
+                } else if (room != null) {   // unreachable server: keep the last known state
+                    homeRow.base = room.title;
+                    homeRow.adapter.setItems(room.cards);
+                }
+                // Media rows that hold focus keep their cards until next time, so nothing moves under you.
+                if (!recentRow.list.hasFocus()) recentRow.adapter.setItems(recent);
+                if (resumeResult != null && !continueRow.list.hasFocus()) {
+                    continueRow.adapter.setItems(resumeResult);
                     jellyfinLoadedAt = SystemClock.elapsedRealtime();
                 }
+                for (ShelfRow row : shelfRows) row.suppressed = false;   // positionShelf decides again
+                if (!shelf.hasFocus()) resetShelfTitles();
                 updateShelfVisibility();
             });
         }, "shelf").start();
@@ -1171,11 +1220,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
 
     /** Shown when a row has cards and the grid sits at the top; the dock app's big name gives way to it. */
     private void updateShelfVisibility() {
-        boolean hasContinue = !continueRow.isEmpty(), hasRecent = !recentRow.isEmpty();
-        int c = hasContinue ? View.VISIBLE : View.GONE, r = hasRecent ? View.VISIBLE : View.GONE;
-        if (shelfTitle1.getVisibility() != c) { shelfTitle1.setVisibility(c); shelfRow1.setVisibility(c); }
-        if (shelfTitle2.getVisibility() != r) { shelfTitle2.setVisibility(r); shelfRow2.setVisibility(r); }
-        boolean has = hasContinue || hasRecent;
+        boolean has = false;
+        for (ShelfRow row : shelfRows) {
+            int vis = row.visible() ? View.VISIBLE : View.GONE;
+            View rowView = (View) row.list.getParent();
+            if (rowView.getVisibility() != vis) rowView.setVisibility(vis);
+            has |= row.visible();
+        }
         heroName.setVisibility(has ? View.INVISIBLE : View.VISIBLE);
         boolean show = has && grid.computeVerticalScrollOffset() == 0;
         if (show == shelfShown) return;
@@ -1194,17 +1245,29 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
         }
     }
 
-    private RecyclerView firstShelfRow() {
-        return !continueRow.isEmpty() ? shelfRow1 : shelfRow2;
+    private List<ShelfRow> visibleShelfRows() {
+        List<ShelfRow> out = new ArrayList<>();
+        for (ShelfRow row : shelfRows) if (row.visible()) out.add(row);
+        return out;
     }
 
-    private RecyclerView lastShelfRow() {
-        return !recentRow.isEmpty() ? shelfRow2 : shelfRow1;
+    private ShelfRow firstShelfRow() {
+        return visibleShelfRows().get(0);
     }
 
-    private void focusShelf(RecyclerView rv) {
-        ShelfAdapter row = (ShelfAdapter) rv.getAdapter();
-        int pos = row.lastFocused;
+    private ShelfRow lastShelfRow() {
+        List<ShelfRow> rows = visibleShelfRows();
+        return rows.get(rows.size() - 1);
+    }
+
+    private ShelfRow rowOf(ShelfAdapter adapter) {
+        for (ShelfRow row : shelfRows) if (row.adapter == adapter) return row;
+        return null;
+    }
+
+    private void focusShelf(ShelfRow row) {
+        RecyclerView rv = row.list;
+        int pos = row.adapter.lastFocused;
         RecyclerView.ViewHolder vh = rv.findViewHolderForAdapterPosition(pos);
         if (vh != null) {
             vh.itemView.requestFocus();
@@ -1218,34 +1281,47 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
     }
 
     private void resetShelfTitles() {
-        shelfTitle1.setText(R.string.shelf_continue);
-        shelfTitle2.setText(R.string.shelf_recent);
+        for (ShelfRow row : shelfRows) row.title.setText(row.base);
     }
 
     @Override
-    public void onShelfFocused(ShelfAdapter row, Shelf.Item item, int position) {
+    public void onShelfFocused(ShelfAdapter adapter, Shelf.Item item, int position) {
         resetShelfTitles();
-        TextView title = row == continueRow ? shelfTitle1 : shelfTitle2;
-        title.setText(getString(row == continueRow ? R.string.shelf_continue : R.string.shelf_recent)
-                + "   ·   " + item.title);
+        ShelfRow row = rowOf(adapter);
+        // Control cards carry their own name; picture cards name themselves in the header.
+        if (row != null && row != homeRow) row.title.setText(row.base + "   ·   " + item.title);
     }
 
     @Override
     public void onShelfClicked(Shelf.Item item) {
-        open(new Intent(item.intent));
+        if (item.entityId == null) {
+            open(new Intent(item.intent));
+            return;
+        }
+        Context app = getApplicationContext();
+        new Thread(() -> {
+            HomeAssistant.Config ha = HomeAssistant.config(app);
+            boolean ok = ha != null && HomeAssistant.press(ha, item);
+            // Give Home Assistant a moment to apply it, then show the new state.
+            handler.postDelayed(() -> {
+                if (!ok && !isDestroyed()) Toast.makeText(this, R.string.not_available, Toast.LENGTH_SHORT).show();
+                refreshShelf();
+            }, ok ? 400 : 0);
+        }, "ha-press").start();
     }
 
     @Override
-    public boolean onShelfVerticalKey(ShelfAdapter row, int keyCode) {
-        RecyclerView rv = row == continueRow ? shelfRow1 : shelfRow2;
+    public boolean onShelfVerticalKey(ShelfAdapter adapter, int keyCode) {
+        List<ShelfRow> rows = visibleShelfRows();
+        int i = rows.indexOf(rowOf(adapter));
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-            if (rv == shelfRow2 && !continueRow.isEmpty()) focusShelf(shelfRow1);
+            if (i > 0) focusShelf(rows.get(i - 1));
             else btnWifi.requestFocus();
         } else {
-            if (rv == shelfRow1 && !recentRow.isEmpty()) focusShelf(shelfRow2);
+            if (i >= 0 && i < rows.size() - 1) focusShelf(rows.get(i + 1));
             else focusTile(lastFocused % COLUMNS);
         }
-        rv.playSoundEffect(keyCode == KeyEvent.KEYCODE_DPAD_UP
+        shelf.playSoundEffect(keyCode == KeyEvent.KEYCODE_DPAD_UP
                 ? SoundEffectConstants.NAVIGATION_UP : SoundEffectConstants.NAVIGATION_DOWN);
         return true;
     }

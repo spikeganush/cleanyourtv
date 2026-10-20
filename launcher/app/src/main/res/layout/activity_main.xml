@@ -224,8 +224,9 @@
         </FrameLayout>
     </LinearLayout>
 
-    <!-- Shelf above the dock: Jellyfin "Continue watching" and recently used apps (Shelf, ShelfAdapter).
-         Positioned just above the dock in code; hidden while it has nothing to show or the grid is scrolled. -->
+    <!-- Shelf above the dock: Home Assistant room controls, Jellyfin "Continue watching" and recently used
+         apps, one shelf_row.xml each (Shelf, ShelfAdapter). Positioned just above the dock in code; hidden
+         while it has nothing to show or the grid is scrolled. -->
     <LinearLayout
         android:id="@+id/shelf"
         android:layout_width="match_parent"
@@ -234,56 +235,6 @@
         android:clipChildren="false"
         android:clipToPadding="false"
         android:visibility="gone">
-
-        <TextView
-            android:id="@+id/shelfTitle1"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="68dp"
-            android:layout_marginEnd="68dp"
-            android:singleLine="true"
-            android:ellipsize="end"
-            android:textColor="#B3FFFFFF"
-            android:textSize="13sp"
-            android:fontFamily="@font/outfit_medium"
-            android:letterSpacing="0.06" />
-
-        <androidx.recyclerview.widget.RecyclerView
-            android:id="@+id/shelfRow1"
-            android:layout_width="match_parent"
-            android:layout_height="86dp"
-            android:paddingStart="68dp"
-            android:paddingEnd="68dp"
-            android:clipToPadding="false"
-            android:clipChildren="false"
-            android:overScrollMode="never"
-            android:scrollbars="none"
-            android:descendantFocusability="afterDescendants" />
-
-        <TextView
-            android:id="@+id/shelfTitle2"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="68dp"
-            android:layout_marginEnd="68dp"
-            android:singleLine="true"
-            android:ellipsize="end"
-            android:textColor="#B3FFFFFF"
-            android:textSize="13sp"
-            android:fontFamily="@font/outfit_medium"
-            android:letterSpacing="0.06" />
-
-        <androidx.recyclerview.widget.RecyclerView
-            android:id="@+id/shelfRow2"
-            android:layout_width="match_parent"
-            android:layout_height="86dp"
-            android:paddingStart="68dp"
-            android:paddingEnd="68dp"
-            android:clipToPadding="false"
-            android:clipChildren="false"
-            android:overScrollMode="never"
-            android:scrollbars="none"
-            android:descendantFocusability="afterDescendants" />
     </LinearLayout>
 
     <!-- The single floating glass highlight that springs between tiles. -->

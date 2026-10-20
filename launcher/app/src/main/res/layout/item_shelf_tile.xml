@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A control card of the shelf (Home Assistant): icon, name and state. Same id as item_shelf.xml so the
+     focus handling treats both alike. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/shelfCard"
+    android:layout_width="156dp"
+    android:layout_height="50dp"
+    android:layout_marginEnd="12dp"
+    android:layout_marginTop="7dp"
+    android:layout_marginBottom="7dp"
+    android:background="@drawable/shelf_tile_bg"
+    android:foreground="@drawable/shelf_card_ring"
+    android:focusable="true"
+    android:clickable="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="12dp"
+        android:paddingEnd="10dp">
+
+        <ImageView
+            android:id="@+id/tileIcon"
+            android:layout_width="22dp"
+            android:layout_height="22dp"
+            android:layout_marginEnd="10dp"
+            android:importantForAccessibility="no" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tileName"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:singleLine="true"
+                android:ellipsize="end"
+                android:textColor="#99FFFFFF"
+                android:textSize="11sp"
+                android:fontFamily="@font/outfit_medium"
+                android:letterSpacing="0.04" />
+
+            <TextView
+                android:id="@+id/tileValue"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:singleLine="true"
+                android:ellipsize="end"
+                android:textColor="#FFFFFFFF"
+                android:textSize="15sp"
+                android:fontFamily="@font/outfit_medium" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

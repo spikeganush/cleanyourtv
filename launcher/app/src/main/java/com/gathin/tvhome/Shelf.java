@@ -50,6 +50,11 @@ final class Shelf {
         Drawable drawable;     // app banner or icon (recent apps)
         final float progress;  // 0..1, or -1 for none
         final Intent intent;
+        // Control cards (HomeAssistant): an icon and a state line instead of a picture.
+        int icon;
+        String value;
+        boolean active;
+        String entityId, state;
 
         Item(String key, String title, float progress, Intent intent) {
             this.key = key;

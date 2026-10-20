@@ -183,6 +183,18 @@
                     android:nextFocusDown="@+id/grid" />
 
                 <TextView
+                    android:id="@+id/btnRemote"
+                    style="@style/TopButton"
+                    android:layout_width="42dp"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:drawablePadding="0dp"
+                    android:visibility="gone"
+                    android:contentDescription="@string/remote_pill"
+                    android:drawableStart="@drawable/ic_remote"
+                    android:nextFocusDown="@+id/grid" />
+
+                <TextView
                     android:id="@+id/btnSettings"
                     style="@style/TopButton"
                     android:text="@string/settings"
@@ -210,6 +222,19 @@
                 android:scrollbars="none"
                 android:descendantFocusability="afterDescendants" />
         </FrameLayout>
+    </LinearLayout>
+
+    <!-- Shelf above the dock: Home Assistant room controls, Jellyfin "Continue watching" and recently used
+         apps, one shelf_row.xml each (Shelf, ShelfAdapter). Positioned just above the dock in code; hidden
+         while it has nothing to show or the grid is scrolled. -->
+    <LinearLayout
+        android:id="@+id/shelf"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:visibility="gone">
     </LinearLayout>
 
     <!-- The single floating glass highlight that springs between tiles. -->

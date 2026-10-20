@@ -1,0 +1,12 @@
+{
+  "server": "http://192.168.1.10:8123",
+  "token": "created in Home Assistant: your profile -> Security -> Long-lived access tokens",
+  "title": "Bedroom",
+  "header": ["sensor.bedroom_temperature", "sensor.bedroom_humidity"],
+  "cards": [
+    {"entity": "light.bedroom", "name": "Light"},
+    {"entity": "input_boolean.bedroom_motion_blocker", "name": "Motion sensor", "on": "Blocked", "off": "Active"},
+    {"entity": "timer.projector_sleep", "name": "Sleep timer"},
+    {"entity": "fan.bedroom", "name": "Fan"}
+  ]
+}

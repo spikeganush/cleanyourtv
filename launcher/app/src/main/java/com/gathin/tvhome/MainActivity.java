@@ -54,6 +54,8 @@ import android.widget.LinearLayout;
 import android.widget.PopupWindow;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.content.res.ColorStateList;
+import android.os.SystemClock;
 
 import androidx.annotation.NonNull;
 import androidx.dynamicanimation.animation.DynamicAnimation;
@@ -61,6 +63,7 @@ import androidx.dynamicanimation.animation.FloatPropertyCompat;
 import androidx.dynamicanimation.animation.SpringAnimation;
 import androidx.dynamicanimation.animation.SpringForce;
 import androidx.recyclerview.widget.GridLayoutManager;
+import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import java.io.File;
@@ -76,7 +79,7 @@ import java.util.Set;
 /**
  * tvOS style home: black, a pinned dock row, an app grid, and one glass highlight that springs between tiles.
  */
-public class MainActivity extends Activity implements AppAdapter.TileListener {
+public class MainActivity extends Activity implements AppAdapter.TileListener, ShelfAdapter.Listener {
 
     private static final int LAUNCHER_SETTINGS_REQUEST = 42;
     /** Sent by QuickSettingsActivity: open Launcher settings from here so Home rebuilds when they close. */
@@ -105,6 +108,22 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private TextView greeting;
     private View btnInputs;
     private TextView btnWifi;
+    // Remote pill: the watcher started through LocalShell (remote_watcher_command), and its state.
+    private TextView btnRemote;
+    // Shelf above the dock (Shelf, ShelfAdapter): Home Assistant room controls, Jellyfin "Continue
+    // watching", then recent apps, top to bottom.
+    private ViewGroup shelf;
+    private ShelfRow homeRow, continueRow, recentRow;
+    private final List<ShelfRow> shelfRows = new ArrayList<>();
+    private boolean shelfShown, shelfLoading;
+    private long jellyfinLoadedAt;
+    private List<String> dockApps;
+    private static boolean usageGrantTried, panelEnableTried;
+    private String remoteCommand;
+    private boolean remoteBusy;
+    private long remoteCheckedAt;
+    // Until the watcher has run once in this process, keep trying for a minute: adbd starts late at boot.
+    private static boolean remoteSeenRunning;
     private TextView shamsiDate;
     private boolean shamsi;
     /** Optional time-of-day backdrop (config.xml, sky_intensity); 0 keeps it hidden. */
@@ -201,6 +220,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             updateGreeting();
             updateWifiLabel();
             sky.update();
+            refreshShelf();   // the sleep timer's minutes, a light switched elsewhere
             handler.postDelayed(this, MINUTE_MS);
         }
     };
@@ -298,6 +318,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         adapter = new AppAdapter(this, this, COLUMNS, cfg);
         grid.setAdapter(adapter);
+        setupShelf(cfg);
 
         // tvOS layout: push the dock row towards the bottom of the screen, leaving room for
         // rows_below_dock grid rows under it; the rest of the grid stays below until you press Down.
@@ -319,6 +340,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
             public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
+                updateShelfVisibility();
                 if (!glassShown) return;
                 glassTargetY -= dy;
                 glassScrollShift -= dy;
@@ -359,7 +381,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
             return true;
         });
-        btnSettings.setOnClickListener(v -> open(systemIntent(Settings.ACTION_SETTINGS)));
+        // With settings_key_panel on, the pill opens the same quick settings panel as the remote's key.
+        boolean settingsPanel = cfg.settingsKeyPanel;
+        btnSettings.setOnClickListener(v -> open(settingsPanel
+                ? new Intent(this, QuickSettingsActivity.class) : systemIntent(Settings.ACTION_SETTINGS)));
+        btnRemote = findViewById(R.id.btnRemote);
+        remoteCommand = getString(R.string.remote_watcher_command);
+        if (!remoteCommand.isEmpty()) {
+            btnRemote.setVisibility(View.VISIBLE);
+            btnRemote.setOnClickListener(v -> checkRemoteWatcher(true));
+        }
         btnSettings.setOnLongClickListener(v -> {
             showSettingsMenu();
             return true;
@@ -372,21 +403,33 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
             if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return true;
             if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                // Back to the dock tile Up came from, not wherever the focus finder lands.
-                focusTile(lastFocused % COLUMNS);
+                // Into the shelf when it shows, else back to the dock tile Up came from.
+                if (shelfShown) focusShelf(firstShelfRow());
+                else focusTile(lastFocused % COLUMNS);
                 return true;
             }
-            int firstButton = btnInputs.getVisibility() == View.VISIBLE ? R.id.btnInputs : R.id.btnWifi;
-            int leftButton = rtlMenuBar ? R.id.btnSettings : firstButton;
-            int rightButton = rtlMenuBar ? firstButton : R.id.btnSettings;
-            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return v.getId() == leftButton;
-            return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == rightButton;
+            if (keyCode != KeyEvent.KEYCODE_DPAD_LEFT && keyCode != KeyEvent.KEYCODE_DPAD_RIGHT) return false;
+            // Walk the visible pills in order ourselves: with the shelf up, the focus finder could
+            // jump from one pill down to a shelf card instead of the next pill.
+            List<View> pills = new ArrayList<>();
+            for (View p : new View[]{btnInputs, btnWifi, btnRemote, findViewById(R.id.btnSettings)}) {
+                if (p.getVisibility() == View.VISIBLE) pills.add(p);
+            }
+            if (rtlMenuBar) Collections.reverse(pills);
+            int i = pills.indexOf(v) + (keyCode == KeyEvent.KEYCODE_DPAD_LEFT ? -1 : 1);
+            if (i >= 0 && i < pills.size()) {
+                pills.get(i).requestFocus();
+                v.playSoundEffect(keyCode == KeyEvent.KEYCODE_DPAD_LEFT
+                        ? SoundEffectConstants.NAVIGATION_LEFT : SoundEffectConstants.NAVIGATION_RIGHT);
+            }
+            return true;
         };
         btnInputs.setOnKeyListener(pillKeys);
         btnWifi.setOnKeyListener(pillKeys);
         btnSettings.setOnKeyListener(pillKeys);
+        btnRemote.setOnKeyListener(pillKeys);
         if (advancedEffects) {
-            for (View button : new View[]{btnInputs, btnWifi, btnSettings}) {
+            for (View button : new View[]{btnInputs, btnWifi, btnRemote, btnSettings}) {
                 button.setOnFocusChangeListener((view, focused) -> view.animate()
                         .scaleX(focused ? 1.04f : 1f).scaleY(focused ? 1.04f : 1f)
                         .setDuration(160).start());
@@ -398,6 +441,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
             boolean onTile = newF != null && newF.getId() == R.id.card;
             if (!onTile) hideGlass();
+            if (newF == null || newF.getId() != R.id.shelfCard) resetShelfTitles();
         });
 
         packageFilter.addAction(Intent.ACTION_PACKAGE_ADDED);
@@ -505,6 +549,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         updateGreeting();
         updateWifiLabel();
         updateInputsButton();
+        checkRemoteWatcher(false);
+        refreshShelf();
         sky.update();
         handler.postDelayed(minuteTick, MINUTE_MS);
         if (festive && diya != null) {
@@ -844,7 +890,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     rtlAppGrid, keyCode == KeyEvent.KEYCODE_DPAD_LEFT);
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-            if (position < COLUMNS) return false;          // dock row: let focus move to the top bar
+            if (position < COLUMNS) {                       // dock row: up into the shelf, or the top bar
+                if (!shelfShown) return false;
+                focusShelf(lastShelfRow());
+                grid.playSoundEffect(SoundEffectConstants.NAVIGATION_UP);
+                return true;
+            }
             target = position - COLUMNS;
         } else {
             int lastRowStart = ((count - 1) / COLUMNS) * COLUMNS;
@@ -1061,6 +1112,335 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     /** Hides the Inputs pill when it would have nothing to list: streaming boxes have no HDMI-in, AV or tuner. */
+    // ---- shelf above the dock ---------------------------------------------------------------------
+
+    /** One shelf row: its header line, its card list, and whether it gave way for lack of room. */
+    private static final class ShelfRow {
+        final TextView title;
+        final RecyclerView list;
+        final ShelfAdapter adapter;
+        String base;
+        boolean suppressed;
+
+        ShelfRow(TextView title, RecyclerView list, ShelfAdapter adapter, String base) {
+            this.title = title;
+            this.list = list;
+            this.adapter = adapter;
+            this.base = base;
+        }
+
+        boolean visible() {
+            return !adapter.isEmpty() && !suppressed;
+        }
+    }
+
+    private void setupShelf(Config cfg) {
+        shelf = findViewById(R.id.shelf);
+        dockApps = cfg.dockApps;
+        homeRow = addShelfRow("", 64);
+        continueRow = addShelfRow(getString(R.string.shelf_continue), 86);
+        recentRow = addShelfRow(getString(R.string.shelf_recent), 86);
+        resetShelfTitles();
+        View.OnLayoutChangeListener reposition = (v, l, t, r, b, ol, ot, or, ob) -> positionShelf();
+        grid.addOnLayoutChangeListener(reposition);
+        shelf.addOnLayoutChangeListener(reposition);
+    }
+
+    private ShelfRow addShelfRow(String base, int listHeightDp) {
+        View v = getLayoutInflater().inflate(R.layout.shelf_row, shelf, false);
+        RecyclerView list = v.findViewById(R.id.rowList);
+        list.getLayoutParams().height = Math.round(listHeightDp * density);
+        list.setLayoutManager(new LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false));
+        list.setItemAnimator(null);
+        ShelfAdapter adapter = new ShelfAdapter(this, animations && !reducedMotion);
+        list.setAdapter(adapter);
+        v.setVisibility(View.GONE);
+        shelf.addView(v);
+        ShelfRow row = new ShelfRow(v.findViewById(R.id.rowTitle), list, adapter, base);
+        shelfRows.add(row);
+        return row;
+    }
+
+    /** Sits just above the dock. Rows that would run into the top bar give way, the lowest priority first. */
+    private void positionShelf() {
+        if (grid.getHeight() == 0 || shelf.getHeight() == 0) return;
+        int[] g = new int[2], r = new int[2], t = new int[2];
+        grid.getLocationInWindow(g);
+        root.getLocationInWindow(r);
+        View topButtons = findViewById(R.id.topButtons);
+        topButtons.getLocationInWindow(t);
+        float dockTop = g[1] - r[1] + grid.getPaddingTop();
+        float top = dockTop - shelf.getHeight() - 4 * density;
+        float headerBottom = t[1] - r[1] + topButtons.getHeight() + 8 * density;
+        if (top < headerBottom) {
+            for (ShelfRow row : new ShelfRow[]{recentRow, continueRow}) {
+                if (row.visible()) {
+                    row.suppressed = true;
+                    shelf.post(this::updateShelfVisibility);
+                    return;
+                }
+            }
+        }
+        shelf.setY(top);
+    }
+
+    /** Loads the rows off the main thread: Home Assistant and recent apps every time, Jellyfin once a minute. */
+    private void refreshShelf() {
+        if (shelfLoading) return;
+        shelfLoading = true;
+        Context app = getApplicationContext();
+        Set<String> skip = new HashSet<>(dockApps);
+        skip.add("com.android.tv.settings");   // the top bar's Settings button already opens it
+        long now = SystemClock.elapsedRealtime();
+        boolean loadJellyfin = jellyfinLoadedAt == 0 || now - jellyfinLoadedAt > 60_000;
+        int imageWidth = Math.round(128 * density * 1.25f);
+        new Thread(() -> {
+            // Usage access is an app op only the shell can grant; ask the TV's adbd once per process.
+            if (!Shelf.hasUsageAccess(app) && !usageGrantTried) {
+                usageGrantTried = true;
+                LocalShell.run(app, "appops set " + app.getPackageName() + " GET_USAGE_STATS allow", 2);
+            }
+            HomeAssistant.Config ha = HomeAssistant.config(app);
+            // The Input-button panel: Android switches accessibility services off on every reinstall,
+            // so switch it back on (once per process) whenever a room is configured.
+            if (ha != null && !panelEnableTried && !panelServiceEnabled(app)) {
+                panelEnableTried = true;
+                String svc = app.getPackageName() + "/.HomePanelService";
+                LocalShell.run(app, "s=$(settings get secure enabled_accessibility_services); case \"$s\" in "
+                        + "*HomePanelService*) ;; null|'') settings put secure enabled_accessibility_services " + svc
+                        + " ;; *) settings put secure enabled_accessibility_services \"$s:" + svc + "\" ;; esac; "
+                        + "settings put secure accessibility_enabled 1", 2);
+            }
+            HomeAssistant.Room room = ha == null ? null : HomeAssistant.load(ha);
+            List<Shelf.Item> recent = Shelf.recentApps(app, skip);
+            List<Shelf.Item> resume = null;
+            if (loadJellyfin) {
+                Shelf.JellyfinConfig c = Shelf.jellyfinConfig(app);
+                resume = c == null ? new ArrayList<>() : Shelf.jellyfinResume(c, imageWidth);
+            }
+            List<Shelf.Item> resumeResult = resume;
+            handler.post(() -> {
+                shelfLoading = false;
+                if (isDestroyed()) return;
+                if (ha == null) {
+                    homeRow.adapter.setItems(new ArrayList<>());
+                } else if (room != null && !homeRow.adapter.isAdjusting()) {   // unreachable server: keep the last known state
+                    homeRow.base = room.title;
+                    room.cards.add(HomePanelService.projectorCard(app));
+                    homeRow.adapter.setItems(room.cards);
+                }
+                // Media rows that hold focus keep their cards until next time, so nothing moves under you.
+                if (!recentRow.list.hasFocus()) recentRow.adapter.setItems(recent);
+                if (resumeResult != null && !continueRow.list.hasFocus()) {
+                    continueRow.adapter.setItems(resumeResult);
+                    jellyfinLoadedAt = SystemClock.elapsedRealtime();
+                }
+                for (ShelfRow row : shelfRows) row.suppressed = false;   // positionShelf decides again
+                if (!shelf.hasFocus()) resetShelfTitles();
+                updateShelfVisibility();
+            });
+        }, "shelf").start();
+    }
+
+    private static boolean panelServiceEnabled(Context context) {
+        String s = Settings.Secure.getString(context.getContentResolver(),
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        return s != null && s.contains("HomePanelService");
+    }
+
+    /** Shown when a row has cards and the grid sits at the top; the dock app's big name gives way to it. */
+    private void updateShelfVisibility() {
+        boolean has = false;
+        for (ShelfRow row : shelfRows) {
+            int vis = row.visible() ? View.VISIBLE : View.GONE;
+            View rowView = (View) row.list.getParent();
+            if (rowView.getVisibility() != vis) rowView.setVisibility(vis);
+            has |= row.visible();
+        }
+        heroName.setVisibility(has ? View.INVISIBLE : View.VISIBLE);
+        boolean show = has && grid.computeVerticalScrollOffset() == 0;
+        if (show == shelfShown) return;
+        shelfShown = show;
+        shelf.animate().cancel();
+        if (show) {
+            shelf.setVisibility(View.VISIBLE);
+            if (animations) {
+                shelf.setAlpha(0f);
+                shelf.animate().alpha(1f).setDuration(200).start();
+            } else {
+                shelf.setAlpha(1f);
+            }
+        } else {
+            shelf.setVisibility(View.INVISIBLE);
+        }
+    }
+
+    private List<ShelfRow> visibleShelfRows() {
+        List<ShelfRow> out = new ArrayList<>();
+        for (ShelfRow row : shelfRows) if (row.visible()) out.add(row);
+        return out;
+    }
+
+    private ShelfRow firstShelfRow() {
+        return visibleShelfRows().get(0);
+    }
+
+    private ShelfRow lastShelfRow() {
+        List<ShelfRow> rows = visibleShelfRows();
+        return rows.get(rows.size() - 1);
+    }
+
+    private ShelfRow rowOf(ShelfAdapter adapter) {
+        for (ShelfRow row : shelfRows) if (row.adapter == adapter) return row;
+        return null;
+    }
+
+    private void focusShelf(ShelfRow row) {
+        RecyclerView rv = row.list;
+        int pos = row.adapter.lastFocused;
+        RecyclerView.ViewHolder vh = rv.findViewHolderForAdapterPosition(pos);
+        if (vh != null) {
+            vh.itemView.requestFocus();
+            return;
+        }
+        rv.scrollToPosition(pos);
+        rv.post(() -> {
+            RecyclerView.ViewHolder h = rv.findViewHolderForAdapterPosition(pos);
+            if (h != null) h.itemView.requestFocus();
+        });
+    }
+
+    private void resetShelfTitles() {
+        for (ShelfRow row : shelfRows) row.title.setText(row.base);
+    }
+
+    @Override
+    public void onShelfFocused(ShelfAdapter adapter, Shelf.Item item, int position) {
+        resetShelfTitles();
+        ShelfRow row = rowOf(adapter);
+        // Control cards carry their own name; picture cards name themselves in the header.
+        if (row != null && row != homeRow) row.title.setText(row.base + "   ·   " + item.title);
+        else if (row != null && HomePanelService.PROJECTOR_KEY.equals(item.key))
+            row.title.setText(row.base + "   ·   " + getString(R.string.projector_hint));
+        else if (row != null && item.brightness >= 0) row.title.setText(row.base + "   ·   " + getString(R.string.shelf_hold_dim));
+        else if (row != null && item.entityId != null && item.entityId.startsWith("timer."))
+            row.title.setText(row.base + "   ·   " + getString(R.string.shelf_hold_restart));
+    }
+
+    @Override
+    public void onShelfClicked(Shelf.Item item) {
+        if (item.entityId == null) {
+            open(new Intent(item.intent));
+            return;
+        }
+        Context app = getApplicationContext();
+        new Thread(() -> {
+            HomeAssistant.Config ha = HomeAssistant.config(app);
+            boolean ok = ha != null && HomeAssistant.press(ha, item);
+            // Give Home Assistant a moment to apply it, then show the new state.
+            handler.postDelayed(() -> {
+                if (!ok && !isDestroyed()) Toast.makeText(this, R.string.not_available, Toast.LENGTH_SHORT).show();
+                refreshShelf();
+            }, ok ? 400 : 0);
+        }, "ha-press").start();
+    }
+
+    private Runnable pendingBrightness;
+
+    @Override
+    public void onShelfAdjust(ShelfAdapter adapter, Shelf.Item item, int delta) {
+        if (HomePanelService.PROJECTOR_KEY.equals(item.key)) {
+            HomePanelService s = HomePanelService.instance;
+            if (s == null) return;
+            s.setPictureLevel(item.brightness + delta);
+            item.brightness = s.pictureLevel();
+            item.value = HomePanelService.pictureText(item.brightness);
+            return;
+        }
+        item.brightness = Math.max(0, Math.min(100, item.brightness + delta));
+        item.active = item.brightness > 0;
+        item.value = item.brightness > 0 ? "On · " + item.brightness + "%" : "Off";
+        // Send the last value only, a moment after the key presses stop, so a held key is one call.
+        if (pendingBrightness != null) handler.removeCallbacks(pendingBrightness);
+        int pct = item.brightness;
+        Context app = getApplicationContext();
+        pendingBrightness = () -> new Thread(() -> {
+            HomeAssistant.Config ha = HomeAssistant.config(app);
+            if (ha != null) HomeAssistant.setBrightness(ha, item.entityId, pct);
+        }, "ha-brightness").start();
+        handler.postDelayed(pendingBrightness, 250);
+    }
+
+    @Override
+    public void onShelfAdjustEnd(ShelfAdapter adapter, Shelf.Item item) {
+        handler.postDelayed(this::refreshShelf, 800);
+    }
+
+    @Override
+    public void onShelfHold(ShelfAdapter adapter, Shelf.Item item) {
+        Context app = getApplicationContext();
+        new Thread(() -> {
+            HomeAssistant.Config ha = HomeAssistant.config(app);
+            boolean ok = ha != null && HomeAssistant.restart(ha, item);
+            handler.postDelayed(() -> {
+                if (isDestroyed()) return;
+                Toast.makeText(this, ok ? R.string.shelf_timer_restarted : R.string.not_available,
+                        Toast.LENGTH_SHORT).show();
+                refreshShelf();
+            }, ok ? 400 : 0);
+        }, "ha-hold").start();
+    }
+
+    @Override
+    public boolean onShelfVerticalKey(ShelfAdapter adapter, int keyCode) {
+        List<ShelfRow> rows = visibleShelfRows();
+        int i = rows.indexOf(rowOf(adapter));
+        if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+            if (i > 0) focusShelf(rows.get(i - 1));
+            else btnWifi.requestFocus();
+        } else {
+            if (i >= 0 && i < rows.size() - 1) focusShelf(rows.get(i + 1));
+            else focusTile(lastFocused % COLUMNS);
+        }
+        shelf.playSoundEffect(keyCode == KeyEvent.KEYCODE_DPAD_UP
+                ? SoundEffectConstants.NAVIGATION_UP : SoundEffectConstants.NAVIGATION_DOWN);
+        return true;
+    }
+
+    private static final int REMOTE_CHECKING = 0xFFFFCC00, REMOTE_RUNNING = 0xFF34C759, REMOTE_OFF = 0xFFFF453A;
+
+    /**
+     * Makes sure the remote-button watcher runs (starting it if needed) and shows the result on the
+     * Remote pill. On Home's return it checks at most every 30 s; pressing the pill always checks.
+     */
+    private void checkRemoteWatcher(boolean userAsked) {
+        if (remoteCommand.isEmpty() || remoteBusy) return;
+        long now = SystemClock.elapsedRealtime();
+        if (!userAsked && remoteCheckedAt != 0 && now - remoteCheckedAt < 30_000) return;
+        remoteCheckedAt = now;
+        remoteBusy = true;
+        setRemoteState(REMOTE_CHECKING, R.string.remote_checking);
+        int attempts = remoteSeenRunning ? 2 : 12;
+        Context app = getApplicationContext();
+        new Thread(() -> {
+            String out = LocalShell.run(app, remoteCommand, attempts);
+            boolean running = out != null && out.contains("watcher running");
+            if (running) remoteSeenRunning = true;
+            handler.post(() -> {
+                remoteBusy = false;
+                if (isDestroyed()) return;
+                int message = running ? R.string.remote_running : R.string.remote_not_running;
+                setRemoteState(running ? REMOTE_RUNNING : REMOTE_OFF, message);
+                if (userAsked) Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+            });
+        }, "remote-watcher").start();
+    }
+
+    private void setRemoteState(int color, int description) {
+        btnRemote.setCompoundDrawableTintList(ColorStateList.valueOf(color));
+        btnRemote.setContentDescription(getString(description));
+    }
+
     private void updateInputsButton() {
         boolean any = liveTvIntent() != null || !sourcePanelService.isEmpty();
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);

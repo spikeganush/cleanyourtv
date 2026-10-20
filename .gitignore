@@ -8,3 +8,8 @@ launcher/local.properties
 # your own TV's dumps (serial, android_id, device names) stay local
 backup/
 .DS_Store
+
+# Personal launcher configs with API keys and tokens (tools/push-config.sh)
+my-*.json
+/jellyfin.json
+/ha.json

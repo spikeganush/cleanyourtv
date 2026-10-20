@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Input-button panel over any app (HomePanelService): the Home Assistant room's cards. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginStart="56dp"
+    android:layout_marginEnd="56dp"
+    android:background="@drawable/home_panel_bg"
+    android:orientation="vertical"
+    android:paddingTop="16dp"
+    android:paddingBottom="10dp"
+    android:clipChildren="false"
+    android:clipToPadding="false">
+
+    <TextView
+        android:id="@+id/panelTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="24dp"
+        android:layout_marginEnd="24dp"
+        android:singleLine="true"
+        android:ellipsize="end"
+        android:textColor="#CCFFFFFF"
+        android:textSize="14sp"
+        android:fontFamily="@font/outfit_medium"
+        android:letterSpacing="0.06" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/panelList"
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:clipToPadding="false"
+        android:clipChildren="false"
+        android:overScrollMode="never"
+        android:scrollbars="none"
+        android:descendantFocusability="afterDescendants" />
+</LinearLayout>

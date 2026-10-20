@@ -1,3 +1,102 @@
+# cleanyourtv: JMGO N1S + Home Assistant fork
+
+> A personal fork of [Gathin23/cleanyourtv](https://github.com/Gathin23/cleanyourtv), tuned for a
+> **JMGO N1S laser projector** (Google TV 14) driven by an imported **Chromecast voice remote**, with
+> **Jellyfin** and **Home Assistant** on a home server. Everything lives on the `jmgo-remote-buttons`
+> branch; the upstream README follows below this section.
+
+![Home: bedroom controls, Continue watching from Jellyfin, the dock](docs/fork/01-home.jpg)
+
+## What this fork adds
+
+| | Feature | How you use it |
+|---|---|---|
+| 📺 | **YouTube and Netflix buttons** on a Chromecast remote paired to a non-Chromecast TV | They just work again, after reboots too. The round remote icon in the top bar is green when they're live; press it to restart the watcher. |
+| 🏠 | **Home Assistant room row** on a shelf above the dock | Light, motion-sensor blocker, sleep timer, fan; temperature and humidity in the header. OK toggles. |
+| 💡 | **Light brightness** | Hold OK on the light, then ◀ ▶ in 10% steps. |
+| ⏱️ | **Sleep timer restart with a duration** | Hold OK on the timer, pick 30 min, 1 h, 1 h 30 or 2 h, OK. Never cancels the timer (an automation may watch it go idle). |
+| 🔦 | **Projector card** | OK opens JMGO's own brightness (laser levels 1–10). Hold OK dims the picture further, 100% down to 0% in steps of 10. |
+| 🎬 | **Continue watching** from a Jellyfin server | Posters and progress bars; OK opens that movie or episode in the Jellyfin app. |
+| 🕘 | **Recent apps** | The apps you used lately that aren't in the dock. |
+| 🎛️ | **Input button opens the room panel over any app** | The panel floats over what's playing without pausing it. Input again or Back closes it. |
+| ⚙️ | **Settings pill opens the quick settings panel** | TV settings, Display, Network, Apps, Launcher settings. |
+
+<table>
+<tr>
+<td><img src="docs/fork/03-light-brightness.jpg" alt="Light brightness mode"><br><sub>Hold OK on the light: brightness mode</sub></td>
+<td><img src="docs/fork/04-timer-picker.jpg" alt="Sleep timer duration picker"><br><sub>Hold OK on the sleep timer: pick the restart time</sub></td>
+</tr>
+<tr>
+<td><img src="docs/fork/06-projector-dim.jpg" alt="Projector card dimming the picture to 70%"><br><sub>Projector card: picture dimmed to 70%</sub></td>
+<td><img src="docs/fork/05-continue-watching.jpg" alt="Continue watching row from Jellyfin"><br><sub>Continue watching, straight from the Jellyfin server</sub></td>
+</tr>
+<tr>
+<td><img src="docs/fork/07-quick-settings.jpg" alt="Quick settings panel"><br><sub>Settings pill: quick settings panel</sub></td>
+<td><img src="docs/fork/08-jellyfin-deeplink.jpg" alt="Jellyfin opened on the selected movie"><br><sub>OK on a card opens that exact item in Jellyfin</sub></td>
+</tr>
+</table>
+
+## How it works
+
+**The launcher talks to the TV's own ADB.** Some things only the `adb shell` user may do on Android:
+read raw remote events, grant usage access, switch accessibility services on. `LocalShell` is a
+small ADB client inside the launcher that connects to `127.0.0.1:5555` with its own RSA key. The TV
+asks once, "Allow USB debugging?", for that key; tick *Always allow*. After that the launcher can
+repair its own setup on every boot. USB or wireless debugging has to stay on.
+
+**YouTube and Netflix buttons.** The Chromecast remote (`18d1:9450`) sends HID usages `0x0C0077`
+(YouTube) and `0x0C0078` (Netflix). Google TV firmware on non-Chromecast devices often has no key
+layout for this remote model, so both arrive as `KEY_UNKNOWN` and Android drops them. Remapper
+apps can't tell them apart either. [`examples/jmgo-n1s-holan/remotekeys.sh`](examples/jmgo-n1s-holan/remotekeys.sh)
+watches the raw usages with `getevent` and starts the apps. The launcher keeps it running
+(`remote_watcher_command` in `config.xml`): at boot and whenever Home comes back.
+
+**Shelf.** Rows of cards above the dock, built from `shelf_row.xml`. Up from the dock goes into
+them; rows that would run into the top bar give way. Android's Watch Next list can't be read by a
+third-party launcher (it needs a privileged permission), so Continue watching comes from the
+Jellyfin server's resume list instead.
+
+**Home Assistant.** REST API with a long-lived token. Light, switch, fan and input_boolean
+toggle; a timer starts, pauses and resumes; a script or scene runs. The row refreshes when Home
+comes back and every minute.
+
+**Input panel.** `HomePanelService`, an accessibility service, catches `KEYCODE_TV` (the Input
+button) and draws the room's cards in an accessibility overlay. Overlays don't pause the app
+underneath. Android drops accessibility services on every reinstall; the launcher switches it back
+on through `LocalShell`. *Testing tip:* keys sent with `adb shell input` don't reach accessibility
+key filters. Use the real remote.
+
+**Projector brightness.** On the N1S the laser levels 1–10 only exist inside JMGO's private DLP
+service (the driver shows R/G/B currents 125…255); no Android setting changes them. So the card
+opens JMGO's own screen (`android.settings.JMGO_LIGHT`) for levels 1–10 and, below level 1, draws a
+black layer over everything. The Input panel stays above that layer, so it's always reachable; it
+resets to 100% when the service starts.
+
+## Setup
+
+1. Debloat and install the launcher as in the upstream README below. The N1S list is
+   [`examples/jmgo-n1s-holan/debloat.txt`](examples/jmgo-n1s-holan/debloat.txt).
+2. Push the remote watcher once: `adb push examples/jmgo-n1s-holan/remotekeys.sh /data/local/tmp/`.
+   Accept the "Allow USB debugging?" prompt for the launcher's key when it appears, with *Always allow*.
+3. Jellyfin: copy [`jellyfin.example.json`](examples/jmgo-n1s-holan/jellyfin.example.json) to
+   `my-jellyfin.json`, fill it in, then `TV_HOST=<ip> tools/push-config.sh my-jellyfin.json jellyfin.json`.
+4. Home Assistant: same with [`ha.example.json`](examples/jmgo-n1s-holan/ha.example.json) →
+   `my-ha.json` → `TV_HOST=<ip> tools/push-config.sh my-ha.json ha.json`. Put your own entity ids in
+   `header` and `cards`; a card can name its states (`"on": "Blocked"`).
+
+`my-*.json` is git-ignored: tokens and API keys stay on your computer and the TV, never in the
+repo or the APK.
+
+## Limits
+
+- **Power on from standby:** the N1S switches Bluetooth off in standby (`bluetooth.hardware.wakeup_supported=false`),
+  so no Bluetooth remote can wake it, and it drops off the network too. The way forward is an IR
+  blaster in Home Assistant that has learned the JMGO remote's power code.
+- **The dim layer** darkens the picture like sunglasses; it doesn't lower the laser power.
+- Built and tested on one JMGO N1S (K80A, firmware UKNV.260401.001) only.
+
+---
+
 <p align="center">
   <a href="https://cleanyour.tv"><img src="https://raw.githubusercontent.com/Gathin23/cleanyourtv/main/docs/banner.png" alt="CleanYourTV. Your TV, minus the ads." width="800"></a>
 </p>

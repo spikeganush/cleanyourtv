@@ -10,6 +10,9 @@
     <string name="shelf_hold_dim">Hold OK for brightness</string>
     <string name="shelf_hold_restart">Hold OK to restart: ◀ ▶ picks the time</string>
     <string name="shelf_timer_restarted">Timer restarted</string>
+    <string name="projector_card">Projector</string>
+    <string name="projector_no_service">Panel service off</string>
+    <string name="projector_hint">OK: laser level 1–10 · Hold OK: dim below it</string>
     <string name="panel_loading">Home Assistant…</string>
     <string name="panel_unreachable">Home Assistant is not reachable</string>
     <string name="home_panel_name">Home panel</string>

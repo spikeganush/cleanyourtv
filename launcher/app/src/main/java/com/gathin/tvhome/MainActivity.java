@@ -381,7 +381,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
             open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
             return true;
         });
-        btnSettings.setOnClickListener(v -> open(systemIntent(Settings.ACTION_SETTINGS)));
+        // With settings_key_panel on, the pill opens the same quick settings panel as the remote's key.
+        boolean settingsPanel = cfg.settingsKeyPanel;
+        btnSettings.setOnClickListener(v -> open(settingsPanel
+                ? new Intent(this, QuickSettingsActivity.class) : systemIntent(Settings.ACTION_SETTINGS)));
         btnRemote = findViewById(R.id.btnRemote);
         remoteCommand = getString(R.string.remote_watcher_command);
         if (!remoteCommand.isEmpty()) {
@@ -405,11 +408,21 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
                 else focusTile(lastFocused % COLUMNS);
                 return true;
             }
-            int firstButton = btnInputs.getVisibility() == View.VISIBLE ? R.id.btnInputs : R.id.btnWifi;
-            int leftButton = rtlMenuBar ? R.id.btnSettings : firstButton;
-            int rightButton = rtlMenuBar ? firstButton : R.id.btnSettings;
-            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return v.getId() == leftButton;
-            return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == rightButton;
+            if (keyCode != KeyEvent.KEYCODE_DPAD_LEFT && keyCode != KeyEvent.KEYCODE_DPAD_RIGHT) return false;
+            // Walk the visible pills in order ourselves: with the shelf up, the focus finder could
+            // jump from one pill down to a shelf card instead of the next pill.
+            List<View> pills = new ArrayList<>();
+            for (View p : new View[]{btnInputs, btnWifi, btnRemote, findViewById(R.id.btnSettings)}) {
+                if (p.getVisibility() == View.VISIBLE) pills.add(p);
+            }
+            if (rtlMenuBar) Collections.reverse(pills);
+            int i = pills.indexOf(v) + (keyCode == KeyEvent.KEYCODE_DPAD_LEFT ? -1 : 1);
+            if (i >= 0 && i < pills.size()) {
+                pills.get(i).requestFocus();
+                v.playSoundEffect(keyCode == KeyEvent.KEYCODE_DPAD_LEFT
+                        ? SoundEffectConstants.NAVIGATION_LEFT : SoundEffectConstants.NAVIGATION_RIGHT);
+            }
+            return true;
         };
         btnInputs.setOnKeyListener(pillKeys);
         btnWifi.setOnKeyListener(pillKeys);
@@ -1213,6 +1226,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
                     homeRow.adapter.setItems(new ArrayList<>());
                 } else if (room != null && !homeRow.adapter.isAdjusting()) {   // unreachable server: keep the last known state
                     homeRow.base = room.title;
+                    room.cards.add(HomePanelService.projectorCard(app));
                     homeRow.adapter.setItems(room.cards);
                 }
                 // Media rows that hold focus keep their cards until next time, so nothing moves under you.
@@ -1306,6 +1320,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
         ShelfRow row = rowOf(adapter);
         // Control cards carry their own name; picture cards name themselves in the header.
         if (row != null && row != homeRow) row.title.setText(row.base + "   ·   " + item.title);
+        else if (row != null && HomePanelService.PROJECTOR_KEY.equals(item.key))
+            row.title.setText(row.base + "   ·   " + getString(R.string.projector_hint));
         else if (row != null && item.brightness >= 0) row.title.setText(row.base + "   ·   " + getString(R.string.shelf_hold_dim));
         else if (row != null && item.entityId != null && item.entityId.startsWith("timer."))
             row.title.setText(row.base + "   ·   " + getString(R.string.shelf_hold_restart));
@@ -1333,6 +1349,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
 
     @Override
     public void onShelfAdjust(ShelfAdapter adapter, Shelf.Item item, int delta) {
+        if (HomePanelService.PROJECTOR_KEY.equals(item.key)) {
+            HomePanelService s = HomePanelService.instance;
+            if (s == null) return;
+            s.setPictureLevel(item.brightness + delta);
+            item.brightness = s.pictureLevel();
+            item.value = HomePanelService.pictureText(item.brightness);
+            return;
+        }
         item.brightness = Math.max(0, Math.min(100, item.brightness + delta));
         item.active = item.brightness > 0;
         item.value = item.brightness > 0 ? "On · " + item.brightness + "%" : "Off";

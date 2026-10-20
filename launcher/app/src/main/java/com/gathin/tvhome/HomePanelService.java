@@ -2,6 +2,7 @@ package com.gathin.tvhome;
 
 import android.accessibilityservice.AccessibilityService;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.PixelFormat;
 import android.os.Handler;
 import android.os.Looper;
@@ -27,6 +28,8 @@ import androidx.recyclerview.widget.RecyclerView;
 public class HomePanelService extends AccessibilityService implements ShelfAdapter.Listener {
 
     private static final long IDLE_HIDE_MS = 20_000;
+    /** The running service, for the launcher's Projector card (same process). */
+    static HomePanelService instance;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable idleHide = this::hide;
@@ -37,10 +40,53 @@ public class HomePanelService extends AccessibilityService implements ShelfAdapt
     private ShelfAdapter adapter;
     private boolean loading;
     private Runnable pendingBrightness;
+    // "Darker than level 1": a black layer over everything, added first so the panel always sits above
+    // it. Not focusable or touchable; 100 (no layer) after every start, so a reboot never leaves it dark.
+    private View dimLayer;
+    private int pictureLevel = 100;
 
     @Override
     protected void onServiceConnected() {
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+        instance = this;
+        dimLayer = new View(this);
+        dimLayer.setBackgroundColor(0xFF000000);
+        dimLayer.setAlpha(0f);
+        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT);
+        windowManager.addView(dimLayer, lp);
+    }
+
+    int pictureLevel() {
+        return pictureLevel;
+    }
+
+    /** 100: the picture as is; lower: that much of it shows through the black layer; 0: black. */
+    void setPictureLevel(int level) {
+        pictureLevel = Math.max(0, Math.min(100, level));
+        if (dimLayer != null) dimLayer.setAlpha((100 - pictureLevel) / 100f);
+    }
+
+    /** The Projector card: OK opens JMGO's own brightness (levels 1 to 10), holding OK dims below that. */
+    static Shelf.Item projectorCard(Context context) {
+        Intent jmgo = new Intent("android.settings.JMGO_LIGHT").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Shelf.Item item = new Shelf.Item(PROJECTOR_KEY, context.getString(R.string.projector_card), -1f, jmgo);
+        item.icon = R.drawable.ic_ha_projector;
+        HomePanelService s = instance;
+        item.brightness = s != null ? s.pictureLevel : -1;
+        item.active = item.brightness >= 0;
+        item.value = s == null ? context.getString(R.string.projector_no_service) : pictureText(item.brightness);
+        return item;
+    }
+
+    static final String PROJECTOR_KEY = "local:projector";
+
+    static String pictureText(int level) {
+        return level >= 100 ? "Picture 100%" : "Dimmed · " + level + "%";
     }
 
     @Override
@@ -124,6 +170,7 @@ public class HomePanelService extends AccessibilityService implements ShelfAdapt
                     return;
                 }
                 title.setText(room.title);
+                room.cards.add(projectorCard(app));
                 if (!adapter.isAdjusting()) adapter.setItems(room.cards);
                 if (focusFirst) list.post(() -> {
                     RecyclerView.ViewHolder vh = list.findViewHolderForAdapterPosition(adapter.lastFocused);
@@ -141,6 +188,14 @@ public class HomePanelService extends AccessibilityService implements ShelfAdapt
 
     @Override
     public void onShelfClicked(Shelf.Item item) {
+        if (item.entityId == null) {   // the Projector card: JMGO's own brightness screen
+            hide();
+            try {
+                startActivity(new Intent(item.intent));
+            } catch (android.content.ActivityNotFoundException ignored) {
+            }
+            return;
+        }
         Context app = getApplicationContext();
         new Thread(() -> {
             HomeAssistant.Config ha = HomeAssistant.config(app);
@@ -166,6 +221,12 @@ public class HomePanelService extends AccessibilityService implements ShelfAdapt
 
     @Override
     public void onShelfAdjust(ShelfAdapter row, Shelf.Item item, int delta) {
+        if (PROJECTOR_KEY.equals(item.key)) {
+            setPictureLevel(item.brightness + delta);
+            item.brightness = pictureLevel;
+            item.value = pictureText(pictureLevel);
+            return;
+        }
         item.brightness = Math.max(0, Math.min(100, item.brightness + delta));
         item.active = item.brightness > 0;
         item.value = item.brightness > 0 ? "On · " + item.brightness + "%" : "Off";
@@ -196,6 +257,13 @@ public class HomePanelService extends AccessibilityService implements ShelfAdapt
     @Override
     public void onDestroy() {
         hide();
+        if (dimLayer != null) {
+            try {
+                windowManager.removeView(dimLayer);
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
+        if (instance == this) instance = null;
         super.onDestroy();
     }
 }

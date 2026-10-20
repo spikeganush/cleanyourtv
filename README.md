@@ -2,8 +2,8 @@
 
 > A personal fork of [Gathin23/cleanyourtv](https://github.com/Gathin23/cleanyourtv), tuned for a
 > **JMGO N1S laser projector** (Google TV 14) driven by an imported **Chromecast voice remote**, with
-> **Jellyfin** and **Home Assistant** on a home server. Everything lives on the `jmgo-remote-buttons`
-> branch; the upstream README follows below this section.
+> **Jellyfin** and **Home Assistant** on a home server. The upstream README follows below this
+> section.
 
 ![Home: bedroom controls, Continue watching from Jellyfin, the dock](docs/fork/01-home.jpg)
 

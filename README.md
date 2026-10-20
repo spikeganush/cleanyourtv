@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://cleanyour.tv">cleanyour.tv</a> ·
   <a href="PROMPT.md">The prompt</a> ·
-  <a href="examples/">80 TV lists</a> ·
+  <a href="examples/">81 TV lists</a> ·
   <a href="SHOWCASE.md">16 built on it</a> ·
   <a href="https://x.com/gathint/status/2111379569030939102">The tweet</a>
 </p>
@@ -23,7 +23,7 @@ Strip the bloatware from any Android TV or Google TV over Wi-Fi, and replace the
 screen with a clean launcher that looks like an Apple TV. **No root, no cable, nothing uninstalled,
 and a one-line restore if you change your mind.**
 
-<h3 align="center">80 TV models &nbsp;·&nbsp; 28 brands &nbsp;·&nbsp; 15 languages &nbsp;·&nbsp; 300 KB launcher</h3>
+<h3 align="center">81 TV models &nbsp;·&nbsp; 29 brands &nbsp;·&nbsp; 15 languages &nbsp;·&nbsp; 300 KB launcher</h3>
 
 <p align="center">
   <sub><b>FEATURED IN</b></sub><br><br>
@@ -114,7 +114,7 @@ Tested lists from contributors, one folder per model in [`examples/`](examples/)
 **TCL** 16 · **Xiaomi** 15 · **Sony** 13 · **Hisense** 4 · **Philips** 4 · **BenQ** 2 · **CHiQ** 2 ·
 **Hitachi** 2 · **Panasonic** 2 · **Skyworth** 2 · AiPro2K · Amazon Fire TV Stick · Chromecast with Google TV ·
 Haier · Insignia Fire TV · Kalley · NVIDIA Shield · OnePlus · onn · PRISM+ · RCA · Redmi · SANYO · Thomson ·
-Toshiba Fire TV · Vu · Stellamore and XGIMI projectors
+Toshiba Fire TV · Vu · JMGO, Stellamore and XGIMI projectors
 
 <details>
 <summary><strong>The full list</strong></summary>
@@ -136,6 +136,7 @@ Toshiba Fire TV · Vu · Stellamore and XGIMI projectors
 | Hitachi 65QLEDSM20 (MTC, bangbae, MediaTek m7322), Australia | Android TV 11 |
 | Hitachi CDH-LE32SMART21 (TCL-built C06, C06_2K_GB, MediaTek MT9221, 1 GB), Argentina | Android TV 11 |
 | Insignia 55" F30 4K Fire TV (NS-55F301NA25, AFTDCT31, duckie) | Fire OS 7 / Android 9 |
+| JMGO N1S projector (K80A, holan, MediaTek m7332), Australia | Google TV 14 |
 | Kalley R10G (device R10G, product ACER_FFM, MOKA, Realtek RTD2875P), Latin America | Google TV 14 |
 | NVIDIA SHIELD TV Pro 2019 (P2897, mdarcy) | Android TV 11 |
 | OnePlus TV (D00, Dubai) | Google TV 14 |

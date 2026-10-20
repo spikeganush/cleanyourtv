@@ -31,7 +31,7 @@ final class ShelfAdapter extends RecyclerView.Adapter<ShelfAdapter.Holder> {
         void onShelfAdjust(ShelfAdapter row, Shelf.Item item, int delta);
         /** Brightness mode ended. */
         void onShelfAdjustEnd(ShelfAdapter row, Shelf.Item item);
-        /** OK held on a timer card: restart it. */
+        /** A timer's duration picked (item.timerMinutes): restart it with it. */
         void onShelfHold(ShelfAdapter row, Shelf.Item item);
     }
 
@@ -42,6 +42,19 @@ final class ShelfAdapter extends RecyclerView.Adapter<ShelfAdapter.Holder> {
     // Brightness mode: the light card held with OK, whose Left/Right now dim instead of move.
     private String adjustingKey;
     private boolean swallowCenterUp;
+    // Timer cards use the same hold mode to pick a restart duration; the last pick is kept.
+    private static final int[] TIMER_MINUTES = {30, 60, 90, 120};
+    private static int timerChoice = 1;
+
+    private static boolean isTimer(Shelf.Item item) {
+        return item.entityId != null && item.entityId.startsWith("timer.");
+    }
+
+    private static String minutesLabel(int minutes) {
+        int h = minutes / 60, m = minutes % 60;
+        if (h == 0) return m + " min";
+        return m == 0 ? h + " h" : h + " h " + m;
+    }
 
     ShelfAdapter(Listener listener, boolean animate) {
         this.listener = listener;
@@ -106,7 +119,8 @@ final class ShelfAdapter extends RecyclerView.Adapter<ShelfAdapter.Holder> {
             h.icon.setImageTintList(ColorStateList.valueOf(item.active ? 0xFFFFD60A : 0x99FFFFFF));
             h.name.setText(item.title);
             boolean adjusting = item.key.equals(adjustingKey);
-            h.value.setText(adjusting ? "\u25C0  " + item.brightness + "%  \u25B6" : item.value);
+            String picked = isTimer(item) ? minutesLabel(TIMER_MINUTES[timerChoice]) : item.brightness + "%";
+            h.value.setText(adjusting ? "\u25C0  " + picked + "  \u25B6" : item.value);
             h.itemView.setContentDescription(item.title + ", " + item.value);
         } else if (item.image != null) {
             h.image.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -127,19 +141,13 @@ final class ShelfAdapter extends RecyclerView.Adapter<ShelfAdapter.Holder> {
             h.progress.setLayoutParams(lp);
         }
         h.itemView.setOnClickListener(v -> listener.onShelfClicked(item));
-        if (item.brightness >= 0) {
+        if (item.brightness >= 0 || isTimer(item)) {
+            // Hold OK: brightness mode for a light, duration picker for a timer.
             h.itemView.setOnLongClickListener(v -> {
                 adjustingKey = item.key;
-                swallowCenterUp = true;   // the release of the held OK must not toggle the light
+                swallowCenterUp = true;   // the release of the held OK must not toggle or pause
                 notifyItemChanged(h.getBindingAdapterPosition());
                 v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
-                return true;
-            });
-        } else if (item.entityId != null && item.entityId.startsWith("timer.")) {
-            h.itemView.setOnLongClickListener(v -> {
-                swallowCenterUp = true;   // the release must not also start/pause it
-                v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
-                listener.onShelfHold(this, item);
                 return true;
             });
         } else {
@@ -166,8 +174,14 @@ final class ShelfAdapter extends RecyclerView.Adapter<ShelfAdapter.Holder> {
             if (pos != RecyclerView.NO_POSITION && items.get(pos).key.equals(adjustingKey)) {
                 Shelf.Item it = items.get(pos);
                 if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                    if (event.getRepeatCount() == 0 || event.getRepeatCount() % 3 == 0) {
-                        listener.onShelfAdjust(this, it, keyCode == KeyEvent.KEYCODE_DPAD_LEFT ? -10 : 10);
+                    int dir = keyCode == KeyEvent.KEYCODE_DPAD_LEFT ? -1 : 1;
+                    if (isTimer(it)) {
+                        if (event.getRepeatCount() == 0) {
+                            timerChoice = Math.max(0, Math.min(TIMER_MINUTES.length - 1, timerChoice + dir));
+                            notifyItemChanged(pos);
+                        }
+                    } else if (event.getRepeatCount() == 0 || event.getRepeatCount() % 3 == 0) {
+                        listener.onShelfAdjust(this, it, dir * 10);
                         notifyItemChanged(pos);
                     }
                     return true;
@@ -178,6 +192,10 @@ final class ShelfAdapter extends RecyclerView.Adapter<ShelfAdapter.Holder> {
                     adjustingKey = null;
                     if (select) swallowCenterUp = true;
                     notifyItemChanged(pos);
+                    if (select && isTimer(it)) {   // OK confirms the picked duration; the others cancel
+                        it.timerMinutes = TIMER_MINUTES[timerChoice];
+                        listener.onShelfHold(this, it);
+                    }
                     listener.onShelfAdjustEnd(this, it);
                     if (select || keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) return true;
                 }

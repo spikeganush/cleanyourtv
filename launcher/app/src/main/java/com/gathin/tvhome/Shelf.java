@@ -56,6 +56,7 @@ final class Shelf {
         boolean active;
         String entityId, state;
         int brightness = -1;   // a dimmable light's 0..100, -1 when it has none
+        int timerMinutes;      // a timer restart's chosen duration, 0 for the timer's own
 
         Item(String key, String title, float progress, Intent intent) {
             this.key = key;

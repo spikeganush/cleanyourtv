@@ -8,7 +8,7 @@
     <string name="shelf_continue">Continue watching</string>
     <string name="shelf_recent">Recent apps</string>
     <string name="shelf_hold_dim">Hold OK for brightness</string>
-    <string name="shelf_hold_restart">Hold OK to restart</string>
+    <string name="shelf_hold_restart">Hold OK to restart: ◀ ▶ picks the time</string>
     <string name="shelf_timer_restarted">Timer restarted</string>
     <string name="panel_loading">Home Assistant…</string>
     <string name="panel_unreachable">Home Assistant is not reachable</string>

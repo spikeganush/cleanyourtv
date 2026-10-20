@@ -151,11 +151,14 @@ final class HomeAssistant {
         return false;
     }
 
-    /** Restarts a timer from its full duration (timer.start on a running timer), like a "restart" script. */
+    /** Restarts a timer (timer.start on a running timer) for item.timerMinutes, or its own duration at 0. */
     static boolean restart(Config c, Shelf.Item item) {
         if (item.entityId == null || !item.entityId.startsWith("timer.")) return false;
         try {
-            post(c, "/api/services/timer/start", "{\"entity_id\":\"" + item.entityId + "\"}");
+            String duration = item.timerMinutes > 0
+                    ? String.format(java.util.Locale.ROOT, ",\"duration\":\"%02d:%02d:00\"", item.timerMinutes / 60, item.timerMinutes % 60)
+                    : "";
+            post(c, "/api/services/timer/start", "{\"entity_id\":\"" + item.entityId + "\"" + duration + "}");
             return true;
         } catch (Exception e) {
             Log.w(TAG, "restart failed: " + e);

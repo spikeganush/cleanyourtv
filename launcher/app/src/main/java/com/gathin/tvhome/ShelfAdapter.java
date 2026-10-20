@@ -27,12 +27,19 @@ final class ShelfAdapter extends RecyclerView.Adapter<ShelfAdapter.Holder> {
         void onShelfClicked(Shelf.Item item);
         /** Up or Down on a card; return true when handled. */
         boolean onShelfVerticalKey(ShelfAdapter row, int keyCode);
+        /** Left/Right in brightness mode: change a light by delta percent. */
+        void onShelfAdjust(ShelfAdapter row, Shelf.Item item, int delta);
+        /** Brightness mode ended. */
+        void onShelfAdjustEnd(ShelfAdapter row, Shelf.Item item);
     }
 
     private final Listener listener;
     private final List<Shelf.Item> items = new ArrayList<>();
     private final boolean animate;
     int lastFocused;
+    // Brightness mode: the light card held with OK, whose Left/Right now dim instead of move.
+    private String adjustingKey;
+    private boolean swallowCenterUp;
 
     ShelfAdapter(Listener listener, boolean animate) {
         this.listener = listener;
@@ -47,6 +54,10 @@ final class ShelfAdapter extends RecyclerView.Adapter<ShelfAdapter.Holder> {
         // Same number of cards: rebind in place, so a focused card keeps its focus (a toggled light).
         if (sameSize) notifyItemRangeChanged(0, items.size());
         else notifyDataSetChanged();
+    }
+
+    boolean isAdjusting() {
+        return adjustingKey != null;
     }
 
     boolean isEmpty() {
@@ -92,7 +103,8 @@ final class ShelfAdapter extends RecyclerView.Adapter<ShelfAdapter.Holder> {
             h.icon.setImageResource(item.icon);
             h.icon.setImageTintList(ColorStateList.valueOf(item.active ? 0xFFFFD60A : 0x99FFFFFF));
             h.name.setText(item.title);
-            h.value.setText(item.value);
+            boolean adjusting = item.key.equals(adjustingKey);
+            h.value.setText(adjusting ? "\u25C0  " + item.brightness + "%  \u25B6" : item.value);
             h.itemView.setContentDescription(item.title + ", " + item.value);
         } else if (item.image != null) {
             h.image.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -113,6 +125,17 @@ final class ShelfAdapter extends RecyclerView.Adapter<ShelfAdapter.Holder> {
             h.progress.setLayoutParams(lp);
         }
         h.itemView.setOnClickListener(v -> listener.onShelfClicked(item));
+        if (item.brightness >= 0) {
+            h.itemView.setOnLongClickListener(v -> {
+                adjustingKey = item.key;
+                swallowCenterUp = true;   // the release of the held OK must not toggle the light
+                notifyItemChanged(h.getBindingAdapterPosition());
+                v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+                return true;
+            });
+        } else {
+            h.itemView.setOnLongClickListener(null);
+        }
         h.itemView.setOnFocusChangeListener((v, focused) -> {
             float s = focused ? 1.08f : 1f;
             if (animate) v.animate().scaleX(s).scaleY(s).setDuration(140).start();
@@ -124,8 +147,32 @@ final class ShelfAdapter extends RecyclerView.Adapter<ShelfAdapter.Holder> {
             }
         });
         h.itemView.setOnKeyListener((v, keyCode, event) -> {
+            boolean select = keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER;
+            if (event.getAction() == KeyEvent.ACTION_UP && select && swallowCenterUp) {
+                swallowCenterUp = false;
+                return true;
+            }
             if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
             int pos = h.getBindingAdapterPosition();
+            if (pos != RecyclerView.NO_POSITION && items.get(pos).key.equals(adjustingKey)) {
+                Shelf.Item it = items.get(pos);
+                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                    if (event.getRepeatCount() == 0 || event.getRepeatCount() % 3 == 0) {
+                        listener.onShelfAdjust(this, it, keyCode == KeyEvent.KEYCODE_DPAD_LEFT ? -10 : 10);
+                        notifyItemChanged(pos);
+                    }
+                    return true;
+                }
+                if (select || keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE
+                        || keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                    if (event.getRepeatCount() > 0) return true;   // still holding OK from entering
+                    adjustingKey = null;
+                    if (select) swallowCenterUp = true;
+                    notifyItemChanged(pos);
+                    listener.onShelfAdjustEnd(this, it);
+                    if (select || keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) return true;
+                }
+            }
             switch (keyCode) {
                 case KeyEvent.KEYCODE_DPAD_UP:
                 case KeyEvent.KEYCODE_DPAD_DOWN:

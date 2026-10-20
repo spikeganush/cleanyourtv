@@ -125,6 +125,10 @@ final class HomeAssistant {
             default:
                 item.icon = R.drawable.ic_ha_power;
         }
+        if ("light".equals(domain) && dimmable(attrs)) {
+            item.brightness = "on".equals(st) && attrs.has("brightness")
+                    ? Math.round(attrs.optInt("brightness") * 100f / 255f) : 0;
+        }
         if ("unavailable".equals(st) || "unknown".equals(st)) {
             item.value = "Unavailable";
         } else if ("timer".equals(domain)) {
@@ -137,6 +141,27 @@ final class HomeAssistant {
             item.value = "on".equals(st) ? "On" : "off".equals(st) ? "Off" : st;
         }
         return item;
+    }
+
+    /** Any colour mode beyond plain on/off means the light takes a brightness. */
+    private static boolean dimmable(JSONObject attrs) {
+        JSONArray modes = attrs != null ? attrs.optJSONArray("supported_color_modes") : null;
+        if (modes == null) return attrs != null && attrs.has("brightness");
+        for (int i = 0; i < modes.length(); i++) if (!"onoff".equals(modes.optString(i))) return true;
+        return false;
+    }
+
+    /** Sets a light's brightness, 1..100 (on), or turns it off at 0. */
+    static boolean setBrightness(Config c, String entityId, int pct) {
+        try {
+            if (pct <= 0) post(c, "/api/services/light/turn_off", "{\"entity_id\":\"" + entityId + "\"}");
+            else post(c, "/api/services/light/turn_on",
+                    "{\"entity_id\":\"" + entityId + "\",\"brightness_pct\":" + pct + "}");
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "brightness failed: " + e);
+            return false;
+        }
     }
 
     private static String timerText(String st, JSONObject attrs) {

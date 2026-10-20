@@ -1201,7 +1201,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
                 if (isDestroyed()) return;
                 if (ha == null) {
                     homeRow.adapter.setItems(new ArrayList<>());
-                } else if (room != null) {   // unreachable server: keep the last known state
+                } else if (room != null && !homeRow.adapter.isAdjusting()) {   // unreachable server: keep the last known state
                     homeRow.base = room.title;
                     homeRow.adapter.setItems(room.cards);
                 }
@@ -1290,6 +1290,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
         ShelfRow row = rowOf(adapter);
         // Control cards carry their own name; picture cards name themselves in the header.
         if (row != null && row != homeRow) row.title.setText(row.base + "   ·   " + item.title);
+        else if (row != null && item.brightness >= 0) row.title.setText(row.base + "   ·   " + getString(R.string.shelf_hold_dim));
     }
 
     @Override
@@ -1308,6 +1309,29 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
                 refreshShelf();
             }, ok ? 400 : 0);
         }, "ha-press").start();
+    }
+
+    private Runnable pendingBrightness;
+
+    @Override
+    public void onShelfAdjust(ShelfAdapter adapter, Shelf.Item item, int delta) {
+        item.brightness = Math.max(0, Math.min(100, item.brightness + delta));
+        item.active = item.brightness > 0;
+        item.value = item.brightness > 0 ? "On · " + item.brightness + "%" : "Off";
+        // Send the last value only, a moment after the key presses stop, so a held key is one call.
+        if (pendingBrightness != null) handler.removeCallbacks(pendingBrightness);
+        int pct = item.brightness;
+        Context app = getApplicationContext();
+        pendingBrightness = () -> new Thread(() -> {
+            HomeAssistant.Config ha = HomeAssistant.config(app);
+            if (ha != null) HomeAssistant.setBrightness(ha, item.entityId, pct);
+        }, "ha-brightness").start();
+        handler.postDelayed(pendingBrightness, 250);
+    }
+
+    @Override
+    public void onShelfAdjustEnd(ShelfAdapter adapter, Shelf.Item item) {
+        handler.postDelayed(this::refreshShelf, 800);
     }
 
     @Override

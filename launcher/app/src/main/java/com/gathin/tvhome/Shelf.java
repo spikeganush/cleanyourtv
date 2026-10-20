@@ -55,6 +55,7 @@ final class Shelf {
         String value;
         boolean active;
         String entityId, state;
+        int brightness = -1;   // a dimmable light's 0..100, -1 when it has none
 
         Item(String key, String title, float progress, Intent intent) {
             this.key = key;

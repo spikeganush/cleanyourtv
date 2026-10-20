@@ -10,9 +10,9 @@
     <!-- Apps pinned to the dock row at the bottom, in this order. Missing apps are skipped. -->
     <string-array name="dock_apps">
         <item>com.netflix.ninja</item>
-        <item>com.amazon.amazonvideo.livingroom</item>
         <item>com.google.android.youtube.tv</item>
-        <item>in.startv.hotstar</item>
+        <item>org.jellyfin.androidtv</item>
+        <item>com.amazon.amazonvideo.livingroom</item>
     </string-array>
     <!-- With fewer dock_apps than columns (or a dock app that is not installed), the free dock slots take
          the first grid apps, so the dock never shows a gap. false leaves them empty (#162); a theme can
@@ -21,12 +21,11 @@
 
     <!-- Apps never shown as tiles (e.g. the Live TV app, which the Inputs menu already covers). -->
     <string-array name="hidden_apps">
-        <item>com.mediatek.wwtv.tvcenter</item>
-        <item>com.mitv.gallery</item>
+        <item>com.jmgo.player</item>
     </string-array>
 
     <!-- The TV's Live TV / tuner app, offered at the end of the Inputs menu. Leave empty to omit. -->
-    <string name="live_tv_package" translatable="false">com.mediatek.wwtv.tvcenter</string>
+    <string name="live_tv_package" translatable="false"></string>
 
     <!-- Some TVs give their Live TV app no leanback entry point at all, so `live_tv_package` above
          resolves to nothing (TCL Android TV 9 on China-market sets is one). This action is then sent
@@ -98,4 +97,15 @@
          sets its opacity. Around 60 reads clearly without hiding a wallpaper. Can also be set with
          "sky_intensity": 60 in a theme's config.json. -->
     <integer name="sky_intensity">0</integer>
+    <!-- Shell command that makes sure a remote-button watcher runs, e.g. the JMGO N1S's
+         /data/local/tmp/remotekeys.sh for the Chromecast remote's YouTube and Netflix buttons. It runs as
+         the adb shell user through the TV's own adbd on 127.0.0.1:5555 (see LocalShell): at start, and
+         whenever Home comes back, at most every 30 s. The first run shows "Allow USB debugging?" for the
+         launcher's key: tick "Always allow". It must print "watcher running" when the watcher is up.
+         Not empty: a Remote pill shows the state (green running, amber checking, red not running) and
+         restarts the watcher when pressed. Empty: off, no pill.
+         The check uses pidof, which matches process names only: pgrep -f also matched this command's own
+         shell. The hang-up signal is ignored up front (it is inherited), and the command waits until the
+         watcher is up, because closing the session too early on a busy TV killed it. -->
+    <string name="remote_watcher_command" translatable="false">trap "" HUP; pidof getevent &gt;/dev/null || { setsid nohup sh /data/local/tmp/remotekeys.sh &gt;/data/local/tmp/remotekeys.log 2&gt;&amp;1 &lt;/dev/null &amp; for i in 1 2 3 4 5 6 7 8 9 10; do sleep 1; pidof getevent &gt;/dev/null &amp;&amp; break; done; }; pidof getevent &gt;/dev/null &amp;&amp; echo watcher running || echo watcher NOT running</string>
 </resources>

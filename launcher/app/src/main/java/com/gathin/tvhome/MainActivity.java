@@ -54,6 +54,8 @@ import android.widget.LinearLayout;
 import android.widget.PopupWindow;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.content.res.ColorStateList;
+import android.os.SystemClock;
 
 import androidx.annotation.NonNull;
 import androidx.dynamicanimation.animation.DynamicAnimation;
@@ -105,6 +107,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private TextView greeting;
     private View btnInputs;
     private TextView btnWifi;
+    // Remote pill: the watcher started through LocalShell (remote_watcher_command), and its state.
+    private TextView btnRemote;
+    private String remoteCommand;
+    private boolean remoteBusy;
+    private long remoteCheckedAt;
+    // Until the watcher has run once in this process, keep trying for a minute: adbd starts late at boot.
+    private static boolean remoteSeenRunning;
     private TextView shamsiDate;
     private boolean shamsi;
     /** Optional time-of-day backdrop (config.xml, sky_intensity); 0 keeps it hidden. */
@@ -360,6 +369,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             return true;
         });
         btnSettings.setOnClickListener(v -> open(systemIntent(Settings.ACTION_SETTINGS)));
+        btnRemote = findViewById(R.id.btnRemote);
+        remoteCommand = getString(R.string.remote_watcher_command);
+        if (!remoteCommand.isEmpty()) {
+            btnRemote.setVisibility(View.VISIBLE);
+            btnRemote.setOnClickListener(v -> checkRemoteWatcher(true));
+        }
         btnSettings.setOnLongClickListener(v -> {
             showSettingsMenu();
             return true;
@@ -385,8 +400,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         btnInputs.setOnKeyListener(pillKeys);
         btnWifi.setOnKeyListener(pillKeys);
         btnSettings.setOnKeyListener(pillKeys);
+        btnRemote.setOnKeyListener(pillKeys);
         if (advancedEffects) {
-            for (View button : new View[]{btnInputs, btnWifi, btnSettings}) {
+            for (View button : new View[]{btnInputs, btnWifi, btnRemote, btnSettings}) {
                 button.setOnFocusChangeListener((view, focused) -> view.animate()
                         .scaleX(focused ? 1.04f : 1f).scaleY(focused ? 1.04f : 1f)
                         .setDuration(160).start());
@@ -505,6 +521,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         updateGreeting();
         updateWifiLabel();
         updateInputsButton();
+        checkRemoteWatcher(false);
         sky.update();
         handler.postDelayed(minuteTick, MINUTE_MS);
         if (festive && diya != null) {
@@ -1061,6 +1078,40 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     /** Hides the Inputs pill when it would have nothing to list: streaming boxes have no HDMI-in, AV or tuner. */
+    private static final int REMOTE_CHECKING = 0xFFFFCC00, REMOTE_RUNNING = 0xFF34C759, REMOTE_OFF = 0xFFFF453A;
+
+    /**
+     * Makes sure the remote-button watcher runs (starting it if needed) and shows the result on the
+     * Remote pill. On Home's return it checks at most every 30 s; pressing the pill always checks.
+     */
+    private void checkRemoteWatcher(boolean userAsked) {
+        if (remoteCommand.isEmpty() || remoteBusy) return;
+        long now = SystemClock.elapsedRealtime();
+        if (!userAsked && remoteCheckedAt != 0 && now - remoteCheckedAt < 30_000) return;
+        remoteCheckedAt = now;
+        remoteBusy = true;
+        setRemoteState(REMOTE_CHECKING, R.string.remote_checking);
+        int attempts = remoteSeenRunning ? 2 : 12;
+        Context app = getApplicationContext();
+        new Thread(() -> {
+            String out = LocalShell.run(app, remoteCommand, attempts);
+            boolean running = out != null && out.contains("watcher running");
+            if (running) remoteSeenRunning = true;
+            handler.post(() -> {
+                remoteBusy = false;
+                if (isDestroyed()) return;
+                int message = running ? R.string.remote_running : R.string.remote_not_running;
+                setRemoteState(running ? REMOTE_RUNNING : REMOTE_OFF, message);
+                if (userAsked) Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+            });
+        }, "remote-watcher").start();
+    }
+
+    private void setRemoteState(int color, int description) {
+        btnRemote.setCompoundDrawableTintList(ColorStateList.valueOf(color));
+        btnRemote.setContentDescription(getString(description));
+    }
+
     private void updateInputsButton() {
         boolean any = liveTvIntent() != null || !sourcePanelService.isEmpty();
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);

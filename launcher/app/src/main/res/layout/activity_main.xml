@@ -183,6 +183,18 @@
                     android:nextFocusDown="@+id/grid" />
 
                 <TextView
+                    android:id="@+id/btnRemote"
+                    style="@style/TopButton"
+                    android:layout_width="42dp"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:drawablePadding="0dp"
+                    android:visibility="gone"
+                    android:contentDescription="@string/remote_pill"
+                    android:drawableStart="@drawable/ic_remote"
+                    android:nextFocusDown="@+id/grid" />
+
+                <TextView
                     android:id="@+id/btnSettings"
                     style="@style/TopButton"
                     android:text="@string/settings"

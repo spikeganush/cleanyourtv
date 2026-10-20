@@ -118,7 +118,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
     private boolean shelfShown, shelfLoading;
     private long jellyfinLoadedAt;
     private List<String> dockApps;
-    private static boolean usageGrantTried;
+    private static boolean usageGrantTried, panelEnableTried;
     private String remoteCommand;
     private boolean remoteBusy;
     private long remoteCheckedAt;
@@ -1188,6 +1188,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
                 LocalShell.run(app, "appops set " + app.getPackageName() + " GET_USAGE_STATS allow", 2);
             }
             HomeAssistant.Config ha = HomeAssistant.config(app);
+            // The Input-button panel: Android switches accessibility services off on every reinstall,
+            // so switch it back on (once per process) whenever a room is configured.
+            if (ha != null && !panelEnableTried && !panelServiceEnabled(app)) {
+                panelEnableTried = true;
+                String svc = app.getPackageName() + "/.HomePanelService";
+                LocalShell.run(app, "s=$(settings get secure enabled_accessibility_services); case \"$s\" in "
+                        + "*HomePanelService*) ;; null|'') settings put secure enabled_accessibility_services " + svc
+                        + " ;; *) settings put secure enabled_accessibility_services \"$s:" + svc + "\" ;; esac; "
+                        + "settings put secure accessibility_enabled 1", 2);
+            }
             HomeAssistant.Room room = ha == null ? null : HomeAssistant.load(ha);
             List<Shelf.Item> recent = Shelf.recentApps(app, skip);
             List<Shelf.Item> resume = null;
@@ -1216,6 +1226,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
                 updateShelfVisibility();
             });
         }, "shelf").start();
+    }
+
+    private static boolean panelServiceEnabled(Context context) {
+        String s = Settings.Secure.getString(context.getContentResolver(),
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        return s != null && s.contains("HomePanelService");
     }
 
     /** Shown when a row has cards and the grid sits at the top; the dock app's big name gives way to it. */
@@ -1291,6 +1307,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
         // Control cards carry their own name; picture cards name themselves in the header.
         if (row != null && row != homeRow) row.title.setText(row.base + "   ·   " + item.title);
         else if (row != null && item.brightness >= 0) row.title.setText(row.base + "   ·   " + getString(R.string.shelf_hold_dim));
+        else if (row != null && item.entityId != null && item.entityId.startsWith("timer."))
+            row.title.setText(row.base + "   ·   " + getString(R.string.shelf_hold_restart));
     }
 
     @Override
@@ -1332,6 +1350,21 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, S
     @Override
     public void onShelfAdjustEnd(ShelfAdapter adapter, Shelf.Item item) {
         handler.postDelayed(this::refreshShelf, 800);
+    }
+
+    @Override
+    public void onShelfHold(ShelfAdapter adapter, Shelf.Item item) {
+        Context app = getApplicationContext();
+        new Thread(() -> {
+            HomeAssistant.Config ha = HomeAssistant.config(app);
+            boolean ok = ha != null && HomeAssistant.restart(ha, item);
+            handler.postDelayed(() -> {
+                if (isDestroyed()) return;
+                Toast.makeText(this, ok ? R.string.shelf_timer_restarted : R.string.not_available,
+                        Toast.LENGTH_SHORT).show();
+                refreshShelf();
+            }, ok ? 400 : 0);
+        }, "ha-hold").start();
     }
 
     @Override

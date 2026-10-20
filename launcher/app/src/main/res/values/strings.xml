@@ -8,6 +8,12 @@
     <string name="shelf_continue">Continue watching</string>
     <string name="shelf_recent">Recent apps</string>
     <string name="shelf_hold_dim">Hold OK for brightness</string>
+    <string name="shelf_hold_restart">Hold OK to restart</string>
+    <string name="shelf_timer_restarted">Timer restarted</string>
+    <string name="panel_loading">Home Assistant…</string>
+    <string name="panel_unreachable">Home Assistant is not reachable</string>
+    <string name="home_panel_name">Home panel</string>
+    <string name="home_panel_description">Opens your Home Assistant room controls over any app with the remote\'s Input button.</string>
     <string name="remote_running">Remote buttons are on</string>
     <string name="remote_checking">Checking the remote buttons</string>
     <string name="remote_not_running">Remote buttons are off. Is USB debugging on?</string>

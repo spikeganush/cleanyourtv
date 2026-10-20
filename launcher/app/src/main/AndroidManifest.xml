@@ -114,6 +114,21 @@
             </intent-filter>
         </service>
 
+        <!-- The remote's Input button (KEYCODE_TV) opens the Home Assistant panel over any app; see
+             HomePanelService. Enabled by MainActivity through LocalShell when ha.json exists. -->
+        <service
+            android:name=".HomePanelService"
+            android:exported="false"
+            android:label="@string/home_panel_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/home_panel_service" />
+        </service>
+
         <!-- The remote's Input button (KEYCODE_TV) opens the input switcher; see InputKeyService. -->
         <service
             android:name=".InputKeyService"

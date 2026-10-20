@@ -151,6 +151,18 @@ final class HomeAssistant {
         return false;
     }
 
+    /** Restarts a timer from its full duration (timer.start on a running timer), like a "restart" script. */
+    static boolean restart(Config c, Shelf.Item item) {
+        if (item.entityId == null || !item.entityId.startsWith("timer.")) return false;
+        try {
+            post(c, "/api/services/timer/start", "{\"entity_id\":\"" + item.entityId + "\"}");
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "restart failed: " + e);
+            return false;
+        }
+    }
+
     /** Sets a light's brightness, 1..100 (on), or turns it off at 0. */
     static boolean setBrightness(Config c, String entityId, int pct) {
         try {

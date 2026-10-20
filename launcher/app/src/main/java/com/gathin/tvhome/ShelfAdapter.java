@@ -31,6 +31,8 @@ final class ShelfAdapter extends RecyclerView.Adapter<ShelfAdapter.Holder> {
         void onShelfAdjust(ShelfAdapter row, Shelf.Item item, int delta);
         /** Brightness mode ended. */
         void onShelfAdjustEnd(ShelfAdapter row, Shelf.Item item);
+        /** OK held on a timer card: restart it. */
+        void onShelfHold(ShelfAdapter row, Shelf.Item item);
     }
 
     private final Listener listener;
@@ -131,6 +133,13 @@ final class ShelfAdapter extends RecyclerView.Adapter<ShelfAdapter.Holder> {
                 swallowCenterUp = true;   // the release of the held OK must not toggle the light
                 notifyItemChanged(h.getBindingAdapterPosition());
                 v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+                return true;
+            });
+        } else if (item.entityId != null && item.entityId.startsWith("timer.")) {
+            h.itemView.setOnLongClickListener(v -> {
+                swallowCenterUp = true;   // the release must not also start/pause it
+                v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+                listener.onShelfHold(this, item);
                 return true;
             });
         } else {
